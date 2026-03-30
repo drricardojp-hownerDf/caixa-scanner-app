@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: caixa-scanner
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: NODE_ENV=production node dist/index.cjs
+    envVars:
+      - key: NODE_VERSION
+        value: "20.19.0"
+      - key: NODE_ENV
+        value: production
