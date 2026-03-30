@@ -1,21 +1,36 @@
-FROM node:20.19.0-slim
+FROM node:20.19.0-bookworm AS builder
 
 WORKDIR /app
+
+# Install build tools needed for better-sqlite3
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 # Copy package files first for better caching
 COPY package.json package-lock.json ./
 
-# Install dependencies without cache mount issues
-RUN npm ci --no-cache
+# Install dependencies
+RUN npm ci
 
 # Copy all source code
 COPY . .
 
-# Build the app
+# Set production env and build
+ENV NODE_ENV=production
 RUN npm run build
 
-# Expose the port Railway assigns
+# --- Production stage ---
+FROM node:20.19.0-bookworm-slim
+
+WORKDIR /app
+
+# Copy built output and node_modules from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+
+ENV NODE_ENV=production
+
+# Railway assigns PORT dynamically
 EXPOSE ${PORT:-5000}
 
-# Start the app
 CMD ["node", "dist/index.cjs"]
