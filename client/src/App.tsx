@@ -5,6 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import Dashboard from "@/pages/dashboard";
 import PropertyDetail from "@/pages/property-detail";
+import SyncPage from "@/pages/sync";
 import NotFound from "@/pages/not-found";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -19,6 +20,7 @@ function AppContent() {
             <Switch>
               <Route path="/" component={Dashboard} />
               <Route path="/property/:id" component={PropertyDetail} />
+              <Route path="/sync" component={SyncPage} />
               <Route component={NotFound} />
             </Switch>
           </Router>

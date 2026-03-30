@@ -213,3 +213,52 @@
     font-variant-numeric: tabular-nums lining-nums;
   }
 }
+
+/* iOS-specific fixes */
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  /* iOS safe areas */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  /* Prevent iOS bounce scroll on body */
+  overscroll-behavior: none;
+  /* Smooth scrolling on iOS */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix iOS input zoom (font size must be 16px+) */
+input, select, textarea {
+  font-size: 16px !important;
+}
+
+/* iOS touch targets - minimum 44px */
+button, a, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Smaller touch targets allowed for badges and inline elements */
+.inline-touch {
+  min-height: auto;
+  min-width: auto;
+}
+
+/* Fix sticky positioning on iOS Safari */
+@supports (-webkit-touch-callout: none) {
+  .sticky {
+    position: -webkit-sticky;
+  }
+}
+
+/* Mobile sidebar overlay fix */
+@media (max-width: 768px) {
+  [data-sidebar="sidebar"] {
+    z-index: 50;
+  }
+}

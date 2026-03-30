@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage, type PropertyFilters } from "./storage";
+import { syncFromApify, getSyncStatus } from "./apify";
 
 export function registerRoutes(server: Server, app: Express) {
   // Get all properties with filters
@@ -69,6 +70,43 @@ export function registerRoutes(server: Server, app: Express) {
   app.get("/api/cidades", (req, res) => {
     const cidades = storage.getDistinctCidades(req.query.uf as string | undefined);
     res.json(cidades);
+  });
+
+  // Sync from Apify - start data collection
+  app.post("/api/sync", async (req, res) => {
+    const { token, estado, cidade, modalidade } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: "Token da Apify é obrigatório" });
+    }
+    if (!estado) {
+      return res.status(400).json({ error: "Selecione pelo menos um estado" });
+    }
+
+    // Don't await — run in background
+    syncFromApify(token, estado, cidade, modalidade)
+      .then(result => console.log("Sync completed:", result))
+      .catch(err => console.error("Sync error:", err));
+
+    res.json({ message: "Sincronização iniciada", status: "running" });
+  });
+
+  // Get sync status
+  app.get("/api/sync/status", (_req, res) => {
+    res.json(getSyncStatus());
+  });
+
+  // Clear all properties (for re-sync)
+  app.delete("/api/properties", (_req, res) => {
+    const all = storage.getProperties();
+    let deleted = 0;
+    for (const p of all) {
+      if (p.favorito !== 1) { // Keep favorites
+        storage.deleteProperty(p.id);
+        deleted++;
+      }
+    }
+    res.json({ deleted, kept: all.length - deleted });
   });
 }
 
