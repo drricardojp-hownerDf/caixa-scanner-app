@@ -1,48 +1,22 @@
 /**
  * Apify Integration — Fetches real property data from Caixa Econômica Federal
- * 
- * Uses the Apify Actor "pizani/caixa-imoveis-scraper" via REST API.
- * The user provides their Apify API token through the app settings.
- * 
- * Flow:
- * 1. User enters Apify token + selects state/city filters
- * 2. Backend calls Apify to run the actor
- * 3. Waits for completion, fetches dataset
- * 4. Transforms data to our schema and saves to SQLite
  */
 
 import { storage } from "./storage";
 import type { InsertProperty } from "@shared/schema";
 
 const APIFY_BASE_URL = "https://api.apify.com/v2";
-// Primary: free pay-per-result actor
-const ACTOR_ID = "giopasquale21~caixa-leilao-de-imoveis";
-// Fallback: subscription-based actor (requires $10/mo plan)
-const ACTOR_ID_ALT = "pizani~caixa-imoveis-scraper";
 
-// Map Apify modalidade values to our tipoVenda
+// Try actors in order - first one that works wins
+const ACTORS = [
+  "giopasquale21~caixa-leilao-de-imoveis",  // pay-per-result, free trial
+  "pizani~caixa-imoveis-scraper",             // subscription-based fallback
+];
+
 const modalidadeMap: Record<string, string> = {
-  "auction": "AUCTION",
-  "bid": "BID",
-  "online": "ONLINE",
-  "direct": "DIRECT",
-  "AUCTION": "AUCTION",
-  "BID": "BID",
-  "ONLINE": "ONLINE",
-  "DIRECT": "DIRECT",
+  "auction": "AUCTION", "bid": "BID", "online": "ONLINE", "direct": "DIRECT",
+  "AUCTION": "AUCTION", "BID": "BID", "ONLINE": "ONLINE", "DIRECT": "DIRECT",
 };
-
-interface ApifyRunInput {
-  estado?: string;
-  cidade?: string;
-  cidade_nome?: string;
-  modalidade?: string | string[];
-  tipo_imovel?: string;
-  tipoImovel?: string;
-  faixa_valor?: string;
-  descontoMinimo?: number;
-  maxItems?: number;
-}
 
 interface SyncStatus {
   status: "idle" | "running" | "completed" | "error";
@@ -61,31 +35,32 @@ export function getSyncStatus(): SyncStatus {
   return { ...currentSyncStatus };
 }
 
-function parseDecimal(value: string | null | undefined): number | null {
-  if (!value || value.trim() === "") return null;
-  // Handle Brazilian number format: "250.000,00" -> 250000.00
-  const cleaned = value.replace(/\./g, "").replace(",", ".");
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+function parseDecimal(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    if (value.trim() === "") return null;
+    const cleaned = value.replace(/\./g, "").replace(",", ".");
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? null : num;
+  }
+  return null;
 }
 
-function parsePercent(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const cleaned = value.replace("%", "").replace(",", ".").trim();
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+function parsePercent(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const cleaned = value.replace("%", "").replace(",", ".").trim();
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? null : num;
+  }
+  return null;
 }
 
 function extractCep(address: string): string | null {
   const match = address.match(/CEP:\s*(\d{5}-?\d{3})/);
   return match ? match[1] : null;
-}
-
-function extractBairro(address: string, neighborhood?: string): string | null {
-  if (neighborhood) return neighborhood;
-  // Try to extract bairro from address pattern: "..., BAIRRO - CEP:..."
-  const match = address.match(/,\s*([^,]+)\s*-\s*CEP:/);
-  return match ? match[1].trim() : null;
 }
 
 function mapModalidade(mod: string | undefined): string {
@@ -99,30 +74,25 @@ function mapModalidade(mod: string | undefined): string {
 }
 
 function transformApifyItem(item: any): InsertProperty {
-  // Handle BOTH actor output formats:
-  // Format A (pizani): item.valores.valor_avaliacao, item.area.area_total, etc.
-  // Format B (giopasquale21): item.valorAvaliacao, item.valorMinimo, item.desconto, etc.
+  // Handle multiple actor output formats
 
   // --- Parse values ---
   const valorAvaliacao = 
-    (typeof item.valorAvaliacao === "number" ? item.valorAvaliacao : null) ||
-    parseDecimal(item.valores?.valor_avaliacao) ||
-    parseDecimal(item.valorAvaliacao);
+    parseDecimal(item.valorAvaliacao) ||
+    parseDecimal(item.valores?.valor_avaliacao);
   
   const valorMin1 = parseDecimal(item.valores?.valor_minimo_venda_1_leilao);
   const valorMin2 = parseDecimal(item.valores?.valor_minimo_venda_2_leilao);
   const valorMinVendaRaw = parseDecimal(item.valores?.valor_minimo_venda);
-  const valorMinimoNew = typeof item.valorMinimo === "number" ? item.valorMinimo : parseDecimal(item.valorMinimo);
+  const valorMinimoNew = parseDecimal(item.valorMinimo);
   const valorMinVenda = valorMinVendaRaw || valorMinimoNew || valorMin2 || valorMin1;
 
-  const descontoRaw = parsePercent(item.valores?.desconto);
-  const descontoNew = typeof item.desconto === "number" ? item.desconto : parsePercent(item.desconto);
-  const desconto = descontoRaw || descontoNew;
+  const desconto = parsePercent(item.valores?.desconto) || parsePercent(item.desconto);
   
   // --- Parse areas ---
-  const areaTotal = parseDecimal(item.area?.area_total) || (typeof item.areaTotal === "number" ? item.areaTotal : null);
-  const areaPrivativa = parseDecimal(item.area?.area_privativa) || (typeof item.areaPrivativa === "number" ? item.areaPrivativa : null);
-  const areaTerreno = parseDecimal(item.area?.area_terreno) || (typeof item.areaTerreno === "number" ? item.areaTerreno : null);
+  const areaTotal = parseDecimal(item.area?.area_total) || parseDecimal(item.areaTotal);
+  const areaPrivativa = parseDecimal(item.area?.area_privativa) || parseDecimal(item.areaPrivativa);
+  const areaTerreno = parseDecimal(item.area?.area_terreno) || parseDecimal(item.areaTerreno);
 
   // --- Tipo venda ---
   const tipoVenda = mapModalidade(item.tipo_venda || item.modalidade);
@@ -179,7 +149,7 @@ function transformApifyItem(item: any): InsertProperty {
     areaPrivativa,
     areaTerreno,
     endereco: address,
-    bairro: item.neighborhood || item.bairro || extractBairro(address) || null,
+    bairro: item.neighborhood || item.bairro || null,
     cidade: item.city || item.cidade || "",
     uf: item.uf || item.estado || "",
     cep: extractCep(address) || null,
@@ -213,6 +183,46 @@ function transformApifyItem(item: any): InsertProperty {
   };
 }
 
+async function tryRunActor(
+  actorId: string,
+  token: string,
+  input: any,
+): Promise<{ runId: string; datasetId: string } | null> {
+  console.log(`[Apify] Trying actor: ${actorId} with input:`, JSON.stringify(input));
+  
+  try {
+    const startResponse = await fetch(
+      `${APIFY_BASE_URL}/acts/${actorId}/runs?token=${token}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+
+    if (!startResponse.ok) {
+      const errorText = await startResponse.text();
+      console.log(`[Apify] Actor ${actorId} start failed: ${startResponse.status} - ${errorText}`);
+      return null;
+    }
+
+    const runData = await startResponse.json();
+    const runId = runData.data?.id;
+    const datasetId = runData.data?.defaultDatasetId;
+
+    if (!runId) {
+      console.log(`[Apify] Actor ${actorId}: no runId returned`);
+      return null;
+    }
+
+    console.log(`[Apify] Actor ${actorId} started. runId: ${runId}, datasetId: ${datasetId}`);
+    return { runId, datasetId };
+  } catch (err: any) {
+    console.log(`[Apify] Actor ${actorId} exception: ${err.message}`);
+    return null;
+  }
+}
+
 export async function syncFromApify(
   token: string,
   estado: string,
@@ -226,44 +236,44 @@ export async function syncFromApify(
   };
 
   try {
-    // Build input parameters for giopasquale21 actor
-    const input: ApifyRunInput = {
-      estado,
-      maxItems: 500, // Buscar até 500 imóveis por estado
-    };
-    if (cidadeNome) input.cidade = cidadeNome;
+    // Build input for primary actor (giopasquale21)
+    const inputPrimary: any = { estado };
+    if (cidadeNome) inputPrimary.cidade = cidadeNome;
     if (modalidade) {
-      // Map our modalidade values to the actor's format
       const modMap: Record<string, string[]> = {
-        "auction": ["4"],    // Leilão SFI Edital Único
-        "bid": ["5"],        // Licitação Aberta
-        "online": ["7", "8"], // Venda Online + Venda Direta Online
-        "direct": ["6"],     // Venda Direta FAR
+        "auction": ["4"], "bid": ["5"], "online": ["7", "8"], "direct": ["6"],
       };
-      if (modMap[modalidade]) input.modalidade = modMap[modalidade];
+      if (modMap[modalidade]) inputPrimary.modalidade = modMap[modalidade];
     }
 
-    // Start the actor run
-    const startResponse = await fetch(
-      `${APIFY_BASE_URL}/acts/${ACTOR_ID}/runs?token=${token}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
+    // Build input for fallback actor (pizani)
+    const inputFallback: any = { estado };
+    if (cidadeNome) inputFallback.cidade_nome = cidadeNome;
+    if (modalidade) inputFallback.modalidade = modalidade;
+
+    // Try each actor until one works
+    let runResult: { runId: string; datasetId: string } | null = null;
+    const inputs = [inputPrimary, inputFallback];
+    let usedActorIndex = -1;
+
+    for (let i = 0; i < ACTORS.length; i++) {
+      currentSyncStatus = {
+        status: "running",
+        message: `Conectando à fonte de dados (tentativa ${i + 1})...`,
+      };
+      runResult = await tryRunActor(ACTORS[i], token, inputs[i]);
+      if (runResult) {
+        usedActorIndex = i;
+        break;
       }
-    );
-
-    if (!startResponse.ok) {
-      const errorText = await startResponse.text();
-      throw new Error(`Erro ao iniciar busca: ${startResponse.status} - ${errorText}`);
     }
 
-    const runData = await startResponse.json();
-    const runId = runData.data?.id;
-
-    if (!runId) {
-      throw new Error("Não foi possível obter o ID da execução");
+    if (!runResult) {
+      throw new Error("Nenhum serviço de busca disponível. Verifique se o token está correto.");
     }
+
+    const { runId, datasetId } = runResult;
+    console.log(`[Apify] Using actor: ${ACTORS[usedActorIndex]}`);
 
     currentSyncStatus = {
       status: "running",
@@ -271,32 +281,41 @@ export async function syncFromApify(
       runId,
     };
 
-    // Poll for completion (max 5 minutes)
+    // Poll for completion (max 10 minutes for large states like SP)
     let attempts = 0;
-    const maxAttempts = 60; // 60 * 5s = 300s = 5 min
+    const maxAttempts = 120; // 120 * 5s = 600s = 10 min
     let runStatus = "";
 
     while (attempts < maxAttempts) {
       await new Promise(resolve => setTimeout(resolve, 5000));
       
-      const statusResponse = await fetch(
-        `${APIFY_BASE_URL}/actor-runs/${runId}?token=${token}`
-      );
-      
-      if (statusResponse.ok) {
-        const statusData = await statusResponse.json();
-        runStatus = statusData.data?.status;
+      try {
+        const statusResponse = await fetch(
+          `${APIFY_BASE_URL}/actor-runs/${runId}?token=${token}`
+        );
         
-        if (runStatus === "SUCCEEDED") break;
-        if (runStatus === "FAILED" || runStatus === "ABORTED" || runStatus === "TIMED-OUT") {
-          throw new Error(`A busca falhou com status: ${runStatus}`);
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          runStatus = statusData.data?.status;
+          const stats = statusData.data?.stats;
+          
+          console.log(`[Apify] Run status: ${runStatus}, stats:`, JSON.stringify(stats || {}));
+          
+          if (runStatus === "SUCCEEDED") break;
+          if (runStatus === "FAILED" || runStatus === "ABORTED" || runStatus === "TIMED-OUT") {
+            throw new Error(`A busca falhou com status: ${runStatus}`);
+          }
         }
+      } catch (err: any) {
+        if (err.message?.includes("falhou com status")) throw err;
+        // Network error, continue polling
       }
 
       attempts++;
+      const pct = Math.min(95, Math.round((attempts / maxAttempts) * 100));
       currentSyncStatus = {
         status: "running",
-        message: `Coletando dados... (${Math.round((attempts / maxAttempts) * 100)}%)`,
+        message: `Coletando dados... (${pct}%) — pode levar alguns minutos`,
         runId,
         progress: attempts,
         total: maxAttempts,
@@ -304,11 +323,10 @@ export async function syncFromApify(
     }
 
     if (runStatus !== "SUCCEEDED") {
-      throw new Error("Tempo esgotado. A busca demorou mais de 5 minutos.");
+      throw new Error("Tempo esgotado. A busca demorou mais de 10 minutos. Tente com um estado menor ou filtre por cidade.");
     }
 
     // Fetch the dataset
-    const datasetId = runData.data?.defaultDatasetId;
     if (!datasetId) {
       throw new Error("Dataset não encontrado");
     }
@@ -329,6 +347,12 @@ export async function syncFromApify(
 
     const items: any[] = await dataResponse.json();
     
+    console.log(`[Apify] Received ${items?.length || 0} items from dataset`);
+    if (items && items.length > 0) {
+      console.log(`[Apify] Sample item keys:`, Object.keys(items[0]));
+      console.log(`[Apify] Sample item:`, JSON.stringify(items[0]).substring(0, 500));
+    }
+    
     if (!items || items.length === 0) {
       currentSyncStatus = {
         status: "completed",
@@ -339,6 +363,7 @@ export async function syncFromApify(
 
     // Transform and save
     let savedCount = 0;
+    let errorCount = 0;
     for (const item of items) {
       try {
         const property = transformApifyItem(item);
@@ -346,7 +371,6 @@ export async function syncFromApify(
           // Check if property already exists (by idImovel)
           const existing = storage.getProperties().find(p => p.idImovel === property.idImovel);
           if (existing) {
-            // Update existing
             storage.updateProperty(existing.id, property);
           } else {
             storage.createProperty(property);
@@ -354,18 +378,21 @@ export async function syncFromApify(
           savedCount++;
         }
       } catch (err) {
-        console.error("Erro ao processar imóvel:", err);
+        errorCount++;
+        if (errorCount <= 3) console.error("[Apify] Erro ao processar imóvel:", err);
       }
     }
 
+    const msg = `${savedCount} imóveis sincronizados com sucesso!${errorCount > 0 ? ` (${errorCount} com erro)` : ""}`;
     currentSyncStatus = {
       status: "completed",
-      message: `${savedCount} imóveis sincronizados com sucesso!`,
+      message: msg,
     };
 
-    return { success: true, count: savedCount, message: `${savedCount} imóveis sincronizados` };
+    return { success: true, count: savedCount, message: msg };
 
   } catch (error: any) {
+    console.error("[Apify] Sync error:", error.message);
     currentSyncStatus = {
       status: "error",
       message: error.message || "Erro desconhecido",
