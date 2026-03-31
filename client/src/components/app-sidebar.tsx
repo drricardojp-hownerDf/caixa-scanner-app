@@ -11,7 +11,7 @@ import {
   SidebarMenuItem,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { LayoutDashboard, Heart, Building2, TrendingUp, RefreshCw } from "lucide-react";
+import { LayoutDashboard, Heart, Building2, TrendingUp, RefreshCw, Smartphone } from "lucide-react";
 
 const navItems = [
   { label: "Painel", href: "/", icon: LayoutDashboard },
@@ -83,6 +83,25 @@ export function AppSidebar() {
                   <Link href="/?orderBy=desconto">
                     <Building2 className="h-4 w-4" />
                     <span>Maior Desconto</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Ferramentas</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location === "/shortcut"}
+                >
+                  <Link href="/shortcut">
+                    <Smartphone className="h-4 w-4" />
+                    <span>Atalho iOS</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

@@ -13,7 +13,7 @@ import { useApifyToken } from "@/hooks/use-apify-token";
 import {
   Key, Database, Trash2, ExternalLink, ShieldCheck, AlertCircle,
   Upload, FileSpreadsheet, CheckCircle2, Loader2, ChevronDown,
-  ChevronRight, Globe, ArrowRight, FileUp, X, File
+  ChevronRight, Globe, ArrowRight, FileUp, X, File, Smartphone
 } from "lucide-react";
 
 interface FileResult {
@@ -431,6 +431,22 @@ export default function SyncPage() {
           </CollapsibleContent>
         </Card>
       </Collapsible>
+
+      {/* iOS Shortcut tip */}
+      <a href="/#/shortcut" className="block">
+        <Card className="border-card-border hover:bg-muted/50 transition-colors cursor-pointer">
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-3">
+              <Smartphone className="h-5 w-5 text-primary shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">Dica: Crie um Atalho do iOS para sincronizar com um toque</p>
+                <p className="text-xs text-muted-foreground">Veja o passo a passo</p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+            </div>
+          </CardContent>
+        </Card>
+      </a>
 
       {/* Section 4: Gerenciar Dados */}
       <Card className="border-card-border">

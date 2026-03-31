@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import Dashboard from "@/pages/dashboard";
 import PropertyDetail from "@/pages/property-detail";
 import SyncPage from "@/pages/sync";
+import ShortcutGuidePage from "@/pages/shortcut-guide";
 import NotFound from "@/pages/not-found";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -21,6 +22,7 @@ function AppContent() {
               <Route path="/" component={Dashboard} />
               <Route path="/property/:id" component={PropertyDetail} />
               <Route path="/sync" component={SyncPage} />
+              <Route path="/shortcut" component={ShortcutGuidePage} />
               <Route component={NotFound} />
             </Switch>
           </main>
