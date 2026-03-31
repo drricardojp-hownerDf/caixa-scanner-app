@@ -15,7 +15,10 @@ import { storage } from "./storage";
 import type { InsertProperty } from "@shared/schema";
 
 const APIFY_BASE_URL = "https://api.apify.com/v2";
-const ACTOR_ID = "pizani~caixa-imoveis-scraper";
+// Primary: free pay-per-result actor
+const ACTOR_ID = "giopasquale21~caixa-leilao-de-imoveis";
+// Fallback: subscription-based actor (requires $10/mo plan)
+const ACTOR_ID_ALT = "pizani~caixa-imoveis-scraper";
 
 // Map Apify modalidade values to our tipoVenda
 const modalidadeMap: Record<string, string> = {
@@ -30,11 +33,15 @@ const modalidadeMap: Record<string, string> = {
 };
 
 interface ApifyRunInput {
-  estado: string;
+  estado?: string;
+  cidade?: string;
   cidade_nome?: string;
-  modalidade?: string;
+  modalidade?: string | string[];
   tipo_imovel?: string;
+  tipoImovel?: string;
   faixa_valor?: string;
+  descontoMinimo?: number;
+  maxItems?: number;
 }
 
 interface SyncStatus {
@@ -81,21 +88,49 @@ function extractBairro(address: string, neighborhood?: string): string | null {
   return match ? match[1].trim() : null;
 }
 
+function mapModalidade(mod: string | undefined): string {
+  if (!mod) return "AUCTION";
+  const lower = mod.toLowerCase();
+  if (lower.includes("leil") || lower.includes("auction") || lower.includes("sfi")) return "AUCTION";
+  if (lower.includes("licita") || lower.includes("bid") || lower.includes("concorr")) return "BID";
+  if (lower.includes("online") || lower.includes("venda online")) return "ONLINE";
+  if (lower.includes("diret") || lower.includes("direct") || lower.includes("far")) return "DIRECT";
+  return modalidadeMap[mod] || "AUCTION";
+}
+
 function transformApifyItem(item: any): InsertProperty {
-  const valorAvaliacao = parseDecimal(item.valores?.valor_avaliacao);
+  // Handle BOTH actor output formats:
+  // Format A (pizani): item.valores.valor_avaliacao, item.area.area_total, etc.
+  // Format B (giopasquale21): item.valorAvaliacao, item.valorMinimo, item.desconto, etc.
+
+  // --- Parse values ---
+  const valorAvaliacao = 
+    (typeof item.valorAvaliacao === "number" ? item.valorAvaliacao : null) ||
+    parseDecimal(item.valores?.valor_avaliacao) ||
+    parseDecimal(item.valorAvaliacao);
+  
   const valorMin1 = parseDecimal(item.valores?.valor_minimo_venda_1_leilao);
   const valorMin2 = parseDecimal(item.valores?.valor_minimo_venda_2_leilao);
-  const valorMinVenda = parseDecimal(item.valores?.valor_minimo_venda);
-  const desconto = parsePercent(item.valores?.desconto);
-  
-  const areaTotal = parseDecimal(item.area?.area_total);
-  const areaPrivativa = parseDecimal(item.area?.area_privativa);
-  const areaTerreno = parseDecimal(item.area?.area_terreno);
+  const valorMinVendaRaw = parseDecimal(item.valores?.valor_minimo_venda);
+  const valorMinimoNew = typeof item.valorMinimo === "number" ? item.valorMinimo : parseDecimal(item.valorMinimo);
+  const valorMinVenda = valorMinVendaRaw || valorMinimoNew || valorMin2 || valorMin1;
 
-  const tipoVenda = modalidadeMap[item.tipo_venda] || item.tipo_venda || "AUCTION";
-  const address = item.address || item.informacoes_leilao?.endereco || "";
+  const descontoRaw = parsePercent(item.valores?.desconto);
+  const descontoNew = typeof item.desconto === "number" ? item.desconto : parsePercent(item.desconto);
+  const desconto = descontoRaw || descontoNew;
   
-  // Parse auction dates
+  // --- Parse areas ---
+  const areaTotal = parseDecimal(item.area?.area_total) || (typeof item.areaTotal === "number" ? item.areaTotal : null);
+  const areaPrivativa = parseDecimal(item.area?.area_privativa) || (typeof item.areaPrivativa === "number" ? item.areaPrivativa : null);
+  const areaTerreno = parseDecimal(item.area?.area_terreno) || (typeof item.areaTerreno === "number" ? item.areaTerreno : null);
+
+  // --- Tipo venda ---
+  const tipoVenda = mapModalidade(item.tipo_venda || item.modalidade);
+
+  // --- Address ---
+  const address = item.address || item.endereco || item.informacoes_leilao?.endereco || "";
+  
+  // --- Auction dates ---
   let dataLeilao1: string | null = null;
   let dataLeilao2: string | null = null;
   if (item.informacoes_leilao?.datas) {
@@ -105,13 +140,13 @@ function transformApifyItem(item: any): InsertProperty {
     }
   }
 
-  // Estimate market price per m2 (rough estimate based on avaliação)
+  // --- Estimate market price ---
   const area = areaPrivativa || areaTotal || 50;
   const precoM2Mercado = valorAvaliacao && area > 0 ? (valorAvaliacao / area) * 1.1 : null;
   const precoAluguelM2 = precoM2Mercado ? precoM2Mercado * 0.005 : null;
 
-  // Calculate viability scores
-  const bestPrice = valorMinVenda || valorMin2 || valorMin1 || valorAvaliacao || 0;
+  // --- Calculate viability scores ---
+  const bestPrice = valorMinVenda || valorAvaliacao || 0;
   const marketValue = precoM2Mercado && area ? precoM2Mercado * area : valorAvaliacao || bestPrice;
 
   let scoreFLIP = 0;
@@ -121,7 +156,7 @@ function transformApifyItem(item: any): InsertProperty {
   if (bestPrice > 0 && marketValue > 0) {
     const margin = (marketValue - bestPrice) / bestPrice;
     scoreFLIP = Math.min(100, Math.max(0, margin * 100));
-    scoreReforma = Math.min(100, Math.max(0, (margin - 0.15) * 120)); // needs bigger margin due to reform costs
+    scoreReforma = Math.min(100, Math.max(0, (margin - 0.15) * 120));
     
     if (precoAluguelM2 && area) {
       const monthlyRent = precoAluguelM2 * area;
@@ -133,33 +168,33 @@ function transformApifyItem(item: any): InsertProperty {
   const scoreGeral = Math.round((scoreFLIP * 0.4 + scoreReforma * 0.3 + scoreAluguel * 0.3));
 
   return {
-    idImovel: item.id_imovel || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    idImovel: item.id_imovel || item.idImovel || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     tipoVenda,
     titulo: item.titulo || item.nome_empreendimento || "Imóvel Caixa",
     descricao: item.descricao || item.informacoes_leilao?.descricao || null,
-    tipoImovel: item.informacoes_principais?.tipo_imovel || "Não informado",
-    quartos: item.informacoes_principais?.quartos || null,
-    garagem: item.informacoes_principais?.garagem || null,
+    tipoImovel: item.informacoes_principais?.tipo_imovel || item.tipoImovel || "Não informado",
+    quartos: item.informacoes_principais?.quartos || item.quartos || null,
+    garagem: item.informacoes_principais?.garagem || item.garagem || null,
     areaTotal,
     areaPrivativa,
     areaTerreno,
     endereco: address,
-    bairro: item.neighborhood || extractBairro(address) || null,
-    cidade: item.city || "",
-    uf: item.uf || "",
+    bairro: item.neighborhood || item.bairro || extractBairro(address) || null,
+    cidade: item.city || item.cidade || "",
+    uf: item.uf || item.estado || "",
     cep: extractCep(address) || null,
     valorAvaliacao,
-    valorMinVenda: valorMinVenda || valorMin2 || valorMin1,
+    valorMinVenda,
     valorMinVenda1Leilao: valorMin1,
     valorMinVenda2Leilao: valorMin2,
     desconto,
-    aceitaFGTS: item.accepts_fgts === 1 ? 1 : 0,
-    aceitaFinanciamento: item.accepts_financing === 1 ? 1 : 0,
-    urlImagem: item.url_imagem || (item.fotos && item.fotos.length > 0 ? item.fotos[0] : null),
+    aceitaFGTS: (item.accepts_fgts === 1 || item.aceitaFGTS === 1) ? 1 : 0,
+    aceitaFinanciamento: (item.accepts_financing === 1 || item.aceitaFinanciamento === 1) ? 1 : 0,
+    urlImagem: item.url_imagem || item.urlImagem || (item.fotos && item.fotos.length > 0 ? item.fotos[0] : null),
     fotos: item.fotos ? JSON.stringify(item.fotos) : null,
-    linkEdital: item.auction_notice_link || null,
+    linkEdital: item.auction_notice_link || item.urlEdital || null,
     linkMatricula: item.link_matricula || null,
-    linkImovel: item.link || null,
+    linkImovel: item.link || item.linkImovel || null,
     edital: item.informacoes_leilao?.edital || null,
     leiloeiro: item.informacoes_leilao?.leiloeiro || null,
     dataLeilao1,
@@ -191,10 +226,19 @@ export async function syncFromApify(
   };
 
   try {
-    // Build input parameters
+    // Build input parameters for giopasquale21 actor
     const input: ApifyRunInput = { estado };
-    if (cidadeNome) input.cidade_nome = cidadeNome;
-    if (modalidade) input.modalidade = modalidade;
+    if (cidadeNome) input.cidade = cidadeNome;
+    if (modalidade) {
+      // Map our modalidade values to the actor's format
+      const modMap: Record<string, string[]> = {
+        "auction": ["4"],    // Leilão SFI Edital Único
+        "bid": ["5"],        // Licitação Aberta
+        "online": ["7", "8"], // Venda Online + Venda Direta Online
+        "direct": ["6"],     // Venda Direta FAR
+      };
+      if (modMap[modalidade]) input.modalidade = modMap[modalidade];
+    }
 
     // Start the actor run
     const startResponse = await fetch(
