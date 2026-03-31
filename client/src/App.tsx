@@ -12,21 +12,21 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 
 function AppContent() {
   return (
-    <SidebarProvider>
-      <div className="flex min-h-screen w-full">
-        <AppSidebar />
-        <main className="flex-1 overflow-auto">
-          <Router hook={useHashLocation}>
+    <Router hook={useHashLocation}>
+      <SidebarProvider>
+        <div className="flex min-h-screen w-full">
+          <AppSidebar />
+          <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={Dashboard} />
               <Route path="/property/:id" component={PropertyDetail} />
               <Route path="/sync" component={SyncPage} />
               <Route component={NotFound} />
             </Switch>
-          </Router>
-        </main>
-      </div>
-    </SidebarProvider>
+          </main>
+        </div>
+      </SidebarProvider>
+    </Router>
   );
 }
 

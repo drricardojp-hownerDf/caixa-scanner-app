@@ -239,7 +239,7 @@ export default function Dashboard() {
     <div className="p-4 md:p-6 max-w-[1400px] mx-auto space-y-5">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <SidebarTrigger data-testid="button-sidebar-trigger" />
+        <SidebarTrigger data-testid="button-sidebar-trigger" className="h-10 w-10 min-h-[44px] min-w-[44px]" />
         <div>
           <h1 className="text-lg font-semibold">Painel de Imóveis</h1>
           <p className="text-sm text-muted-foreground">Caixa Econômica Federal — Leilões e Vendas Diretas</p>
