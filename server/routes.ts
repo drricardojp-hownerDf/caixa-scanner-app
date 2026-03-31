@@ -358,6 +358,9 @@ export function registerRoutes(server: Server, app: Express) {
 
   // Import single CSV file
   app.post("/api/import-csv", upload.single("file"), (req, res) => {
+    // Extend timeout for large file processing (3 minutes)
+    req.setTimeout(180_000);
+    res.setTimeout(180_000);
     try {
       if (!req.file) {
         return res.status(400).json({ error: "Nenhum arquivo enviado" });
@@ -380,6 +383,9 @@ export function registerRoutes(server: Server, app: Express) {
 
   // Import multiple CSV files at once
   app.post("/api/import-csv-batch", upload.array("files", 30), (req, res) => {
+    // Extend timeout for large file processing (3 minutes)
+    req.setTimeout(180_000);
+    res.setTimeout(180_000);
     try {
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) {

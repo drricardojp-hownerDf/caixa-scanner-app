@@ -97,25 +97,53 @@ export default function SyncPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const [uploadStatus, setUploadStatus] = useState("");
+
   const uploadFiles = async () => {
     if (selectedFiles.length === 0) return;
 
     setIsUploading(true);
     setBatchDone(false);
+    setUploadStatus("Enviando arquivos...");
     setFileResults(selectedFiles.map((f) => ({
       filename: f.name, imported: 0, updated: 0, errors: 0, status: "uploading" as const,
     })));
 
+    // Generous timeout: 3 minutes for large files (29K+ rows)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180_000);
+
     try {
       const formData = new FormData();
+      const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
       for (const file of selectedFiles) {
         formData.append("files", file);
       }
 
-      const res = await fetch("/api/import-csv-batch", { method: "POST", body: formData });
+      setUploadStatus(
+        totalSize > 5 * 1024 * 1024
+          ? "Processando arquivo grande... isso pode levar até 2 minutos"
+          : "Processando..."
+      );
+
+      const res = await fetch("/api/import-csv-batch", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Erro ao importar");
+        let errorMsg = `Erro do servidor (${res.status})`;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || err.message || errorMsg;
+        } catch {
+          // Response wasn't JSON — use status text
+          errorMsg = `Erro do servidor: ${res.status} ${res.statusText}`;
+        }
+        throw new Error(errorMsg);
       }
 
       const data: BatchResult = await res.json();
@@ -131,10 +159,18 @@ export default function SyncPage() {
       invalidateAll();
       toast({ title: "Importação concluída", description: data.message });
     } catch (err: any) {
-      toast({ title: "Erro na importação", description: err.message, variant: "destructive" });
+      clearTimeout(timeoutId);
+      let description = err.message;
+      if (err.name === "AbortError") {
+        description = "A importação demorou demais e foi cancelada. Tente com menos registros ou verifique sua conexão.";
+      } else if (err.message === "Failed to fetch" || err.message === "Load failed") {
+        description = "Falha na conexão com o servidor. Verifique sua internet e tente novamente.";
+      }
+      toast({ title: "Erro na importação", description, variant: "destructive" });
       setFileResults((prev) => prev.map((f) => ({ ...f, status: "error" as const })));
     } finally {
       setIsUploading(false);
+      setUploadStatus("");
     }
   };
 
@@ -314,7 +350,9 @@ export default function SyncPage() {
           {isUploading && (
             <div className="space-y-1.5">
               <Progress value={uploadProgress} className="h-2" />
-              <p className="text-xs text-muted-foreground text-center">Importando...</p>
+              <p className="text-xs text-muted-foreground text-center">
+                {uploadStatus || "Importando..."}
+              </p>
             </div>
           )}
 

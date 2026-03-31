@@ -15,6 +15,7 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "20mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
@@ -91,6 +92,10 @@ app.use((req, res, next) => {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
+  // Increase server timeout for large CSV imports (3 minutes)
+  httpServer.timeout = 180_000;
+  httpServer.keepAliveTimeout = 180_000;
+
   const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(
     {
