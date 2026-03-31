@@ -90,25 +90,29 @@ function QuickSync() {
   const { toast } = useToast();
   const { token, hasToken } = useApifyToken();
   const [syncEstado, setSyncEstado] = useState("SP");
+  const [syncCidade, setSyncCidade] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
-  const [, navigate] = useLocation();
+  const [syncMessage, setSyncMessage] = useState("");
 
   const syncMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sync", {
       token: token.trim(),
       estado: syncEstado,
+      cidade: syncCidade || undefined,
     }),
     onSuccess: () => {
       setIsSyncing(true);
-      toast({ title: "Buscando imóveis", description: `Buscando em ${syncEstado}... aguarde 1-3 min.` });
-      // Poll for completion
+      setSyncMessage("Buscando imóveis...");
+      toast({ title: "Busca iniciada", description: `Buscando em ${syncEstado}${syncCidade ? ` - ${syncCidade}` : ""}... aguarde 1-5 min.` });
       const interval = setInterval(async () => {
         try {
           const res = await fetch("/api/sync/status");
           const status = await res.json();
+          setSyncMessage(status.message || "Buscando...");
           if (status.status === "completed") {
             clearInterval(interval);
             setIsSyncing(false);
+            setSyncMessage("");
             queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
             queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
             queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
@@ -117,6 +121,7 @@ function QuickSync() {
           } else if (status.status === "error") {
             clearInterval(interval);
             setIsSyncing(false);
+            setSyncMessage("");
             toast({ title: "Erro", description: status.message, variant: "destructive" });
           }
         } catch { /* continue polling */ }
@@ -134,10 +139,10 @@ function QuickSync() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <RefreshCw className="h-4 w-4" />
-              <span>Configure seu token do Apify para buscar imóveis reais</span>
+              <span>Configure seu token para buscar imóveis reais</span>
             </div>
             <Link href="/sync">
-              <Button variant="outline" size="sm" className="shrink-0">
+              <Button variant="outline" size="sm" className="shrink-0 min-h-[44px]">
                 <Settings2 className="h-3.5 w-3.5 mr-1.5" />
                 Configurar
               </Button>
@@ -150,12 +155,11 @@ function QuickSync() {
 
   return (
     <Card className="border-card-border">
-      <CardContent className="p-3.5">
+      <CardContent className="p-3.5 space-y-2.5">
         <div className="flex items-center gap-2.5 flex-wrap">
-          <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
           <Select value={syncEstado} onValueChange={setSyncEstado}>
-            <SelectTrigger className="w-[80px] text-sm h-9">
-              <SelectValue />
+            <SelectTrigger className="w-[80px] text-sm h-10 min-h-[44px]">
+              <SelectValue placeholder="Estado" />
             </SelectTrigger>
             <SelectContent>
               {ESTADOS_SYNC.map(uf => (
@@ -163,31 +167,42 @@ function QuickSync() {
               ))}
             </SelectContent>
           </Select>
+          <input
+            type="text"
+            placeholder="Cidade (opcional)"
+            value={syncCidade}
+            onChange={(e) => setSyncCidade(e.target.value.toUpperCase())}
+            className="flex-1 min-w-[120px] h-10 min-h-[44px] px-3 text-sm rounded-md border border-input bg-background placeholder:text-muted-foreground"
+          />
           <Button
             onClick={() => syncMutation.mutate()}
             disabled={isSyncing}
-            size="sm"
-            className="h-9"
+            className="h-10 min-h-[44px] px-4"
           >
             {isSyncing ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
                 Buscando...
               </>
             ) : (
               <>
-                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                <RefreshCw className="h-4 w-4 mr-1.5" />
                 Atualizar
               </>
             )}
           </Button>
-          <Link href="/sync" className="ml-auto">
-            <Button variant="ghost" size="sm" className="h-9 text-xs text-muted-foreground">
-              <Settings2 className="h-3.5 w-3.5 mr-1" />
-              Config
+          <Link href="/sync">
+            <Button variant="ghost" size="icon" className="h-10 w-10 min-h-[44px] min-w-[44px] text-muted-foreground">
+              <Settings2 className="h-4 w-4" />
             </Button>
           </Link>
         </div>
+        {isSyncing && syncMessage && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>{syncMessage}</span>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

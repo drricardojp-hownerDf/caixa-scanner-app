@@ -227,7 +227,10 @@ export async function syncFromApify(
 
   try {
     // Build input parameters for giopasquale21 actor
-    const input: ApifyRunInput = { estado };
+    const input: ApifyRunInput = {
+      estado,
+      maxItems: 500, // Buscar até 500 imóveis por estado
+    };
     if (cidadeNome) input.cidade = cidadeNome;
     if (modalidade) {
       // Map our modalidade values to the actor's format
