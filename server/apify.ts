@@ -9,8 +9,8 @@ const APIFY_BASE_URL = "https://api.apify.com/v2";
 
 // Try actors in order - first one that works wins
 const ACTORS = [
-  "giopasquale21~caixa-leilao-de-imoveis",  // pay-per-result, free trial
-  "pizani~caixa-imoveis-scraper",             // subscription-based fallback
+  "pizani~caixa-imoveis-scraper",             // most reliable, 27 users, 5.0 rating
+  "giopasquale21~caixa-leilao-de-imoveis",  // pay-per-result fallback
 ];
 
 const modalidadeMap: Record<string, string> = {
@@ -236,24 +236,24 @@ export async function syncFromApify(
   };
 
   try {
-    // Build input for primary actor (giopasquale21)
-    const inputPrimary: any = { estado };
-    if (cidadeNome) inputPrimary.cidade = cidadeNome;
+    // Build input for primary actor (pizani)
+    const inputPizani: any = { estado };
+    if (cidadeNome) inputPizani.cidade_nome = cidadeNome;
+    if (modalidade) inputPizani.modalidade = modalidade;
+
+    // Build input for fallback actor (giopasquale21)
+    const inputGio: any = { estado };
+    if (cidadeNome) inputGio.cidade = cidadeNome;
     if (modalidade) {
       const modMap: Record<string, string[]> = {
         "auction": ["4"], "bid": ["5"], "online": ["7", "8"], "direct": ["6"],
       };
-      if (modMap[modalidade]) inputPrimary.modalidade = modMap[modalidade];
+      if (modMap[modalidade]) inputGio.modalidade = modMap[modalidade];
     }
-
-    // Build input for fallback actor (pizani)
-    const inputFallback: any = { estado };
-    if (cidadeNome) inputFallback.cidade_nome = cidadeNome;
-    if (modalidade) inputFallback.modalidade = modalidade;
 
     // Try each actor until one works
     let runResult: { runId: string; datasetId: string } | null = null;
-    const inputs = [inputPrimary, inputFallback];
+    const inputs = [inputPizani, inputGio];
     let usedActorIndex = -1;
 
     for (let i = 0; i < ACTORS.length; i++) {
@@ -345,9 +345,12 @@ export async function syncFromApify(
       throw new Error("Erro ao baixar resultados");
     }
 
-    const items: any[] = await dataResponse.json();
+    let items: any[] = await dataResponse.json();
     
-    console.log(`[Apify] Received ${items?.length || 0} items from dataset`);
+    // Filter out warning/error messages that aren't real property data
+    items = items.filter(item => !item.warning && (item.id_imovel || item.idImovel || item.titulo || item.valorAvaliacao || item.valores));
+    
+    console.log(`[Apify] Received ${items?.length || 0} valid items from dataset`);
     if (items && items.length > 0) {
       console.log(`[Apify] Sample item keys:`, Object.keys(items[0]));
       console.log(`[Apify] Sample item:`, JSON.stringify(items[0]).substring(0, 500));
