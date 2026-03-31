@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -14,7 +14,7 @@ import { useApifyToken } from "@/hooks/use-apify-token";
 import {
   Building2, MapPin, Bed, Car, Ruler, Percent, Heart, ArrowUpDown,
   Gavel, ShoppingCart, Globe, FileText, TrendingUp, TrendingDown,
-  ChevronRight, Filter, Search, RefreshCw, Loader2, Settings2
+  ChevronRight, Filter, Search, RefreshCw, Loader2, Settings2, Upload
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -93,6 +93,40 @@ function QuickSync() {
   const [syncCidade, setSyncCidade] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
+  const csvInputRef = useRef<HTMLInputElement>(null);
+
+  const csvImportMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/import-csv", { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Erro ao importar");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cidades"] });
+      toast({ title: "CSV importado", description: data.message });
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    },
+    onError: (err: any) => {
+      toast({ title: "Erro na importação", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleCsvImport = () => {
+    csvInputRef.current?.click();
+  };
+
+  const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) csvImportMutation.mutate(file);
+  };
 
   const syncMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sync", {
@@ -139,14 +173,39 @@ function QuickSync() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <RefreshCw className="h-4 w-4" />
-              <span>Configure seu token para buscar imóveis reais</span>
+              <span>Configure seu token ou importe um CSV</span>
             </div>
-            <Link href="/sync">
-              <Button variant="outline" size="sm" className="shrink-0 min-h-[44px]">
-                <Settings2 className="h-3.5 w-3.5 mr-1.5" />
-                Configurar
+            <div className="flex items-center gap-2">
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={handleCsvFileChange}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCsvImport}
+                disabled={csvImportMutation.isPending}
+                className="shrink-0 min-h-[44px]"
+              >
+                {csvImportMutation.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <>
+                    <Upload className="h-3.5 w-3.5 mr-1.5" />
+                    CSV
+                  </>
+                )}
               </Button>
-            </Link>
+              <Link href="/sync">
+                <Button variant="outline" size="sm" className="shrink-0 min-h-[44px]">
+                  <Settings2 className="h-3.5 w-3.5 mr-1.5" />
+                  Configurar
+                </Button>
+              </Link>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -188,6 +247,29 @@ function QuickSync() {
               <>
                 <RefreshCw className="h-4 w-4 mr-1.5" />
                 Atualizar
+              </>
+            )}
+          </Button>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={handleCsvFileChange}
+          />
+          <Button
+            variant="outline"
+            onClick={handleCsvImport}
+            disabled={csvImportMutation.isPending}
+            className="h-10 min-h-[44px] px-3"
+            title="Importar CSV"
+          >
+            {csvImportMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <Upload className="h-4 w-4 mr-1.5" />
+                <span className="hidden sm:inline">CSV</span>
               </>
             )}
           </Button>

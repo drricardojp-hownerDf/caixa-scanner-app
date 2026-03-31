@@ -1,7 +1,203 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import multer from "multer";
 import { storage, type PropertyFilters } from "./storage";
 import { syncFromApify, getSyncStatus } from "./apify";
+import type { InsertProperty } from "@shared/schema";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// --- CSV parsing helpers ---
+
+function parseBrazilianNumber(value: string): number | null {
+  if (!value || !value.trim()) return null;
+  // Brazilian format: 368.191,37 → 368191.37
+  const cleaned = value.trim().replace(/\./g, "").replace(",", ".");
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+function mapTipoVendaCsv(modalidade: string): string {
+  const m = modalidade.trim().toLowerCase();
+  if (m.includes("venda online")) return "ONLINE";
+  if (m.includes("venda direta")) return "DIRECT";
+  if (m.includes("leilão") || m.includes("leilao") || m.includes("sfi")) return "AUCTION";
+  if (m.includes("licitação") || m.includes("licitacao")) return "BID";
+  return "ONLINE";
+}
+
+function parseDescription(desc: string): {
+  tipoImovel: string;
+  areaTotal: number | null;
+  areaPrivativa: number | null;
+  areaTerreno: number | null;
+  quartos: number | null;
+  garagem: number | null;
+} {
+  const result = {
+    tipoImovel: "Não informado",
+    areaTotal: null as number | null,
+    areaPrivativa: null as number | null,
+    areaTerreno: null as number | null,
+    quartos: null as number | null,
+    garagem: null as number | null,
+  };
+
+  if (!desc) return result;
+
+  // Type is the first word before comma
+  const typeMatch = desc.match(/^\s*([^,]+)/);
+  if (typeMatch) result.tipoImovel = typeMatch[1].trim();
+
+  // Areas: "0.00 de área total", "167.60 de área privativa", "0.00 de área do terreno"
+  const areaTotalMatch = desc.match(/([\d.]+)\s*de\s*[áa]rea\s*total/i);
+  if (areaTotalMatch) {
+    const v = parseFloat(areaTotalMatch[1]);
+    result.areaTotal = v > 0 ? v : null;
+  }
+
+  const areaPrivMatch = desc.match(/([\d.]+)\s*de\s*[áa]rea\s*privativa/i);
+  if (areaPrivMatch) {
+    const v = parseFloat(areaPrivMatch[1]);
+    result.areaPrivativa = v > 0 ? v : null;
+  }
+
+  const areaTerrenoMatch = desc.match(/([\d.]+)\s*de\s*[áa]rea\s*do\s*terreno/i);
+  if (areaTerrenoMatch) {
+    const v = parseFloat(areaTerrenoMatch[1]);
+    result.areaTerreno = v > 0 ? v : null;
+  }
+
+  // Quartos: "3 qto(s)"
+  const quartosMatch = desc.match(/(\d+)\s*qto\(s\)/i);
+  if (quartosMatch) result.quartos = parseInt(quartosMatch[1]);
+
+  // Garagem: "2 vaga(s) de garagem"
+  const garagemMatch = desc.match(/(\d+)\s*vaga\(s\)\s*de\s*garagem/i);
+  if (garagemMatch) result.garagem = parseInt(garagemMatch[1]);
+
+  return result;
+}
+
+function buildTitulo(tipoImovel: string, endereco: string): string {
+  // Extract first meaningful part of address (street + number)
+  const parts = endereco.split(",");
+  const street = parts[0]?.trim() || endereco.trim();
+  // Get number if present in second part
+  const numPart = parts[1]?.trim();
+  let numStr = "";
+  if (numPart) {
+    const numMatch = numPart.match(/^N?\.\s*(\d+)/i) || numPart.match(/^(\d+)/);
+    if (numMatch) numStr = `, ${numMatch[1]}`;
+  }
+  return `${tipoImovel} - ${street}${numStr}`;
+}
+
+function parseCsvRow(line: string): string[] {
+  // Simple semicolon split — CSV from Caixa doesn't use quoted fields
+  return line.split(";");
+}
+
+function transformCsvRow(fields: string[]): InsertProperty | null {
+  // Expected columns (0-indexed):
+  // 0: N° do imóvel, 1: UF, 2: Cidade, 3: Bairro, 4: Endereço,
+  // 5: Preço, 6: Valor de avaliação, 7: Desconto, 8: Financiamento,
+  // 9: Descrição, 10: Modalidade de venda, 11: Link de acesso
+  if (fields.length < 10) return null;
+
+  const idImovel = fields[0].trim();
+  const uf = fields[1].trim();
+  const cidade = fields[2].trim();
+  const bairro = fields[3].trim();
+  const endereco = fields[4].trim();
+  const preco = parseBrazilianNumber(fields[5]);
+  const valorAvaliacao = parseBrazilianNumber(fields[6]);
+  const desconto = parseBrazilianNumber(fields[7]);
+  const financiamento = fields[8]?.trim().toLowerCase();
+  const descricao = fields[9]?.trim() || "";
+  const modalidade = fields[10]?.trim() || "";
+  const link = fields[11]?.trim() || "";
+
+  if (!idImovel || !uf || !cidade) return null;
+
+  const parsed = parseDescription(descricao);
+  const tipoVenda = mapTipoVendaCsv(modalidade);
+  const titulo = buildTitulo(parsed.tipoImovel, endereco);
+  const aceitaFinanciamento = financiamento === "sim" ? 1 : 0;
+
+  // Calculate viability scores (same logic as apify.ts)
+  const area = parsed.areaPrivativa || parsed.areaTotal || 50;
+  const valorCompra = preco || 0;
+  const avaliacaoVal = valorAvaliacao || (valorCompra > 0 ? valorCompra * 1.3 : 0);
+  const precoM2Mercado = avaliacaoVal && area > 0 ? (avaliacaoVal / area) * 1.1 : null;
+  const precoAluguelM2 = precoM2Mercado ? precoM2Mercado * 0.005 : null;
+
+  const bestPrice = valorCompra || avaliacaoVal || 0;
+  const marketValue = precoM2Mercado && area ? precoM2Mercado * area : avaliacaoVal || bestPrice;
+
+  let scoreFLIP = 0;
+  let scoreReforma = 0;
+  let scoreAluguel = 0;
+
+  if (bestPrice > 0 && marketValue > 0) {
+    const margin = (marketValue - bestPrice) / bestPrice;
+    scoreFLIP = Math.min(100, Math.max(0, margin * 100));
+    scoreReforma = Math.min(100, Math.max(0, (margin - 0.15) * 120));
+
+    if (precoAluguelM2 && area) {
+      const monthlyRent = precoAluguelM2 * area;
+      const yieldAnnual = (monthlyRent * 12) / (bestPrice * 1.05);
+      scoreAluguel = Math.min(100, Math.max(0, yieldAnnual * 1000));
+    }
+  }
+
+  const scoreGeral = Math.round(scoreFLIP * 0.4 + scoreReforma * 0.3 + scoreAluguel * 0.3);
+
+  return {
+    idImovel,
+    tipoVenda,
+    titulo,
+    descricao: descricao || null,
+    tipoImovel: parsed.tipoImovel,
+    quartos: parsed.quartos,
+    garagem: parsed.garagem,
+    areaTotal: parsed.areaTotal,
+    areaPrivativa: parsed.areaPrivativa,
+    areaTerreno: parsed.areaTerreno,
+    endereco,
+    bairro: bairro || null,
+    cidade,
+    uf,
+    cep: null,
+    valorAvaliacao: valorAvaliacao,
+    valorMinVenda: preco,
+    valorMinVenda1Leilao: null,
+    valorMinVenda2Leilao: null,
+    desconto: desconto,
+    aceitaFGTS: 0,
+    aceitaFinanciamento: aceitaFinanciamento,
+    urlImagem: null,
+    fotos: null,
+    linkEdital: null,
+    linkMatricula: null,
+    linkImovel: link || null,
+    edital: null,
+    leiloeiro: null,
+    dataLeilao1: null,
+    dataLeilao2: null,
+    condominio: null,
+    tributos: null,
+    precoM2Mercado,
+    precoAluguelM2,
+    scoreFLIP: Math.round(scoreFLIP),
+    scoreReforma: Math.round(scoreReforma),
+    scoreAluguel: Math.round(scoreAluguel),
+    scoreGeral,
+    favorito: 0,
+    notas: null,
+    dataColeta: new Date().toISOString(),
+  };
+}
 
 export function registerRoutes(server: Server, app: Express) {
   // Get all properties with filters
@@ -94,6 +290,70 @@ export function registerRoutes(server: Server, app: Express) {
   // Get sync status
   app.get("/api/sync/status", (_req, res) => {
     res.json(getSyncStatus());
+  });
+
+  // Import CSV file
+  app.post("/api/import-csv", upload.single("file"), (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "Nenhum arquivo enviado" });
+      }
+
+      // Decode latin-1 buffer to string
+      const content = req.file.buffer.toString("latin1");
+      const lines = content.split(/\r?\n/);
+
+      // Skip header lines (line 0 = title, line 1 = column headers)
+      // Find the header line that contains "N° do imóvel" to be robust
+      let dataStartIndex = 2;
+      for (let i = 0; i < Math.min(5, lines.length); i++) {
+        if (lines[i].includes("do im") || lines[i].includes("N°")) {
+          dataStartIndex = i + 1;
+          break;
+        }
+      }
+
+      let imported = 0;
+      let updated = 0;
+      let errors = 0;
+
+      for (let i = dataStartIndex; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        try {
+          const fields = parseCsvRow(line);
+          const property = transformCsvRow(fields);
+          if (!property) { errors++; continue; }
+
+          // Check for duplicates
+          const existing = storage.findByIdImovel(property.idImovel);
+          if (existing) {
+            // Preserve favorites and notes
+            const { favorito, notas, ...updateData } = property;
+            storage.updateProperty(existing.id, updateData);
+            updated++;
+          } else {
+            storage.createProperty(property);
+            imported++;
+          }
+        } catch {
+          errors++;
+        }
+      }
+
+      res.json({
+        success: true,
+        imported,
+        updated,
+        errors,
+        total: imported + updated,
+        message: `${imported + updated} imóveis processados (${imported} novos, ${updated} atualizados${errors > 0 ? `, ${errors} erros` : ""})`,
+      });
+    } catch (err: any) {
+      console.error("[CSV Import] Error:", err.message);
+      res.status(500).json({ error: err.message || "Erro ao processar arquivo" });
+    }
   });
 
   // Clear all properties (for re-sync)

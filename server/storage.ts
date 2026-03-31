@@ -88,6 +88,7 @@ export interface PropertyFilters {
 export interface IStorage {
   getProperties(filters?: PropertyFilters): Property[];
   getProperty(id: number): Property | undefined;
+  findByIdImovel(idImovel: string): Property | undefined;
   createProperty(data: InsertProperty): Property;
   updateProperty(id: number, data: Partial<InsertProperty>): Property | undefined;
   deleteProperty(id: number): void;
@@ -142,6 +143,10 @@ export class DatabaseStorage implements IStorage {
 
   getProperty(id: number): Property | undefined {
     return db.select().from(properties).where(eq(properties.id, id)).get();
+  }
+
+  findByIdImovel(idImovel: string): Property | undefined {
+    return db.select().from(properties).where(eq(properties.idImovel, idImovel)).get();
   }
 
   createProperty(data: InsertProperty): Property {

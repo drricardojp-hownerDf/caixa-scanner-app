@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,12 +9,49 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useToast } from "@/hooks/use-toast";
 import { useApifyToken } from "@/hooks/use-apify-token";
 import {
-  Key, Database, Trash2, ExternalLink, ShieldCheck, Info, AlertCircle
+  Key, Database, Trash2, ExternalLink, ShieldCheck, Info, AlertCircle, Upload, FileSpreadsheet, CheckCircle2, Loader2
 } from "lucide-react";
 
 export default function SyncPage() {
   const { toast } = useToast();
   const { token, setToken, hasToken } = useApifyToken();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importResult, setImportResult] = useState<{ imported: number; updated: number; errors: number } | null>(null);
+
+  const importMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/import-csv", { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Erro ao importar");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setImportResult({ imported: data.imported, updated: data.updated, errors: data.errors });
+      queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cidades"] });
+      toast({ title: "Importação concluída", description: data.message });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    onError: (err: any) => {
+      toast({ title: "Erro na importação", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleFileUpload = () => {
+    const file = fileInputRef.current?.files?.[0];
+    if (!file) {
+      toast({ title: "Selecione um arquivo", description: "Escolha um arquivo CSV para importar.", variant: "destructive" });
+      return;
+    }
+    setImportResult(null);
+    importMutation.mutate(file);
+  };
 
   const clearMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", "/api/properties"),
@@ -107,6 +144,60 @@ export default function SyncPage() {
             <ExternalLink className="h-3 w-3" />
             Abrir página do token no Apify
           </a>
+        </CardContent>
+      </Card>
+
+      {/* CSV Import */}
+      <Card className="border-card-border">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <FileSpreadsheet className="h-4 w-4" />
+            Importar CSV da Caixa
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Importe o arquivo CSV baixado diretamente do site da Caixa Econômica Federal.
+            O arquivo deve estar no formato padrão (separado por ponto-e-vírgula).
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="csv-file" className="text-xs text-muted-foreground">
+              Selecione o arquivo .csv
+            </Label>
+            <Input
+              id="csv-file"
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              className="text-sm cursor-pointer"
+            />
+          </div>
+          <Button
+            onClick={handleFileUpload}
+            disabled={importMutation.isPending}
+            className="w-full"
+          >
+            {importMutation.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Importando...
+              </>
+            ) : (
+              <>
+                <Upload className="h-4 w-4 mr-2" />
+                Importar Arquivo
+              </>
+            )}
+          </Button>
+          {importResult && (
+            <div className="p-2.5 bg-green-50 dark:bg-green-900/10 rounded-lg flex items-start gap-2 text-xs text-green-700 dark:text-green-400">
+              <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium">{importResult.imported + importResult.updated} imóveis processados</p>
+                <p>{importResult.imported} novos, {importResult.updated} atualizados{importResult.errors > 0 ? `, ${importResult.errors} erros` : ""}</p>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
