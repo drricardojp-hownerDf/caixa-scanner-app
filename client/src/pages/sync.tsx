@@ -10,9 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useToast } from "@/hooks/use-toast";
+import { useApifyToken } from "@/hooks/use-apify-token";
 import {
   RefreshCw, Key, MapPin, Settings, CheckCircle, AlertCircle,
-  Loader2, Database, Trash2, ExternalLink, Info, Zap
+  Loader2, Database, Trash2, ExternalLink, Info, Zap, ShieldCheck
 } from "lucide-react";
 
 const ESTADOS = [
@@ -30,7 +31,7 @@ interface SyncStatus {
 
 export default function SyncPage() {
   const { toast } = useToast();
-  const [token, setToken] = useState("");
+  const { token, setToken, hasToken } = useApifyToken();
   const [estado, setEstado] = useState("SP");
   const [cidade, setCidade] = useState("");
   const [modalidade, setModalidade] = useState("");
@@ -127,12 +128,18 @@ export default function SyncPage() {
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <Key className="h-4 w-4" />
             Token da API Apify
+            {hasToken && (
+              <span className="inline-flex items-center gap-1 text-xs font-normal text-green-600">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Salvo
+              </span>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div>
             <Label htmlFor="token" className="text-xs text-muted-foreground">
-              Cole seu token aqui (encontrado em apify.com &rarr; Settings &rarr; Integrations)
+              Cole seu token aqui — ele fica salvo no seu navegador. Você só precisa fazer isso uma vez.
             </Label>
             <Input
               id="token"

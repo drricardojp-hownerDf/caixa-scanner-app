@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Property } from "@shared/schema";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,10 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { useToast } from "@/hooks/use-toast";
+import { useApifyToken } from "@/hooks/use-apify-token";
 import {
   Building2, MapPin, Bed, Car, Ruler, Percent, Heart, ArrowUpDown,
   Gavel, ShoppingCart, Globe, FileText, TrendingUp, TrendingDown,
-  ChevronRight, Filter, Search
+  ChevronRight, Filter, Search, RefreshCw, Loader2, Settings2
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -75,6 +77,119 @@ function StatsBar() {
         </Card>
       ))}
     </div>
+  );
+}
+
+const ESTADOS_SYNC = [
+  "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
+  "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN",
+  "RO", "RR", "RS", "SC", "SE", "SP", "TO"
+];
+
+function QuickSync() {
+  const { toast } = useToast();
+  const { token, hasToken } = useApifyToken();
+  const [syncEstado, setSyncEstado] = useState("SP");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [, navigate] = useLocation();
+
+  const syncMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/sync", {
+      token: token.trim(),
+      estado: syncEstado,
+    }),
+    onSuccess: () => {
+      setIsSyncing(true);
+      toast({ title: "Buscando imóveis", description: `Buscando em ${syncEstado}... aguarde 1-3 min.` });
+      // Poll for completion
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch("/api/sync/status");
+          const status = await res.json();
+          if (status.status === "completed") {
+            clearInterval(interval);
+            setIsSyncing(false);
+            queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/cidades"] });
+            toast({ title: "Atualizado", description: status.message });
+          } else if (status.status === "error") {
+            clearInterval(interval);
+            setIsSyncing(false);
+            toast({ title: "Erro", description: status.message, variant: "destructive" });
+          }
+        } catch { /* continue polling */ }
+      }, 3000);
+    },
+    onError: (err: any) => {
+      toast({ title: "Erro", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (!hasToken) {
+    return (
+      <Card className="border-dashed border-primary/30 bg-primary/5">
+        <CardContent className="p-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <RefreshCw className="h-4 w-4" />
+              <span>Configure seu token do Apify para buscar imóveis reais</span>
+            </div>
+            <Link href="/sync">
+              <Button variant="outline" size="sm" className="shrink-0">
+                <Settings2 className="h-3.5 w-3.5 mr-1.5" />
+                Configurar
+              </Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="border-card-border">
+      <CardContent className="p-3.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+          <Select value={syncEstado} onValueChange={setSyncEstado}>
+            <SelectTrigger className="w-[80px] text-sm h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ESTADOS_SYNC.map(uf => (
+                <SelectItem key={uf} value={uf}>{uf}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            onClick={() => syncMutation.mutate()}
+            disabled={isSyncing}
+            size="sm"
+            className="h-9"
+          >
+            {isSyncing ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                Buscando...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Atualizar
+              </>
+            )}
+          </Button>
+          <Link href="/sync" className="ml-auto">
+            <Button variant="ghost" size="sm" className="h-9 text-xs text-muted-foreground">
+              <Settings2 className="h-3.5 w-3.5 mr-1" />
+              Config
+            </Button>
+          </Link>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -248,6 +363,9 @@ export default function Dashboard() {
 
       {/* Stats KPIs */}
       <StatsBar />
+
+      {/* Quick Sync */}
+      <QuickSync />
 
       {/* Filters */}
       <Card className="border-card-border">
