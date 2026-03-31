@@ -5,7 +5,65 @@ import { storage, type PropertyFilters } from "./storage";
 import { syncFromApify, getSyncStatus } from "./apify";
 import type { InsertProperty } from "@shared/schema";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+// In-memory last sync metadata
+let lastSyncMeta: {
+  lastSync: string;
+  totalProperties: number;
+  byState: Record<string, number>;
+} | null = null;
+
+function updateSyncMeta() {
+  const stats = storage.getStats();
+  lastSyncMeta = {
+    lastSync: new Date().toISOString(),
+    totalProperties: stats.total,
+    byState: stats.porEstado,
+  };
+}
+
+function processCSVBuffer(buffer: Buffer): { imported: number; updated: number; errors: number } {
+  const content = buffer.toString("latin1");
+  const lines = content.split(/\r?\n/);
+
+  let dataStartIndex = 2;
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    if (lines[i].includes("do im") || lines[i].includes("N°")) {
+      dataStartIndex = i + 1;
+      break;
+    }
+  }
+
+  let imported = 0;
+  let updated = 0;
+  let errors = 0;
+
+  for (let i = dataStartIndex; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    try {
+      const fields = parseCsvRow(line);
+      const property = transformCsvRow(fields);
+      if (!property) { errors++; continue; }
+
+      const existing = storage.findByIdImovel(property.idImovel);
+      if (existing) {
+        const { favorito, notas, ...updateData } = property;
+        storage.updateProperty(existing.id, updateData);
+        updated++;
+      } else {
+        storage.createProperty(property);
+        imported++;
+      }
+    } catch {
+      errors++;
+    }
+  }
+
+  return { imported, updated, errors };
+}
 
 // --- CSV parsing helpers ---
 
@@ -292,68 +350,90 @@ export function registerRoutes(server: Server, app: Express) {
     res.json(getSyncStatus());
   });
 
-  // Import CSV file
+  // Import single CSV file
   app.post("/api/import-csv", upload.single("file"), (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "Nenhum arquivo enviado" });
       }
 
-      // Decode latin-1 buffer to string
-      const content = req.file.buffer.toString("latin1");
-      const lines = content.split(/\r?\n/);
-
-      // Skip header lines (line 0 = title, line 1 = column headers)
-      // Find the header line that contains "N° do imóvel" to be robust
-      let dataStartIndex = 2;
-      for (let i = 0; i < Math.min(5, lines.length); i++) {
-        if (lines[i].includes("do im") || lines[i].includes("N°")) {
-          dataStartIndex = i + 1;
-          break;
-        }
-      }
-
-      let imported = 0;
-      let updated = 0;
-      let errors = 0;
-
-      for (let i = dataStartIndex; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-
-        try {
-          const fields = parseCsvRow(line);
-          const property = transformCsvRow(fields);
-          if (!property) { errors++; continue; }
-
-          // Check for duplicates
-          const existing = storage.findByIdImovel(property.idImovel);
-          if (existing) {
-            // Preserve favorites and notes
-            const { favorito, notas, ...updateData } = property;
-            storage.updateProperty(existing.id, updateData);
-            updated++;
-          } else {
-            storage.createProperty(property);
-            imported++;
-          }
-        } catch {
-          errors++;
-        }
-      }
+      const result = processCSVBuffer(req.file.buffer);
+      updateSyncMeta();
 
       res.json({
         success: true,
-        imported,
-        updated,
-        errors,
-        total: imported + updated,
-        message: `${imported + updated} imóveis processados (${imported} novos, ${updated} atualizados${errors > 0 ? `, ${errors} erros` : ""})`,
+        ...result,
+        total: result.imported + result.updated,
+        message: `${result.imported + result.updated} imóveis processados (${result.imported} novos, ${result.updated} atualizados${result.errors > 0 ? `, ${result.errors} erros` : ""})`,
       });
     } catch (err: any) {
       console.error("[CSV Import] Error:", err.message);
       res.status(500).json({ error: err.message || "Erro ao processar arquivo" });
     }
+  });
+
+  // Import multiple CSV files at once
+  app.post("/api/import-csv-batch", upload.array("files", 30), (req, res) => {
+    try {
+      const files = req.files as Express.Multer.File[];
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: "Nenhum arquivo enviado" });
+      }
+
+      const results: Array<{ filename: string; imported: number; updated: number; errors: number }> = [];
+      let totalImported = 0;
+      let totalUpdated = 0;
+      let totalErrors = 0;
+
+      for (const file of files) {
+        try {
+          const result = processCSVBuffer(file.buffer);
+          results.push({ filename: file.originalname, ...result });
+          totalImported += result.imported;
+          totalUpdated += result.updated;
+          totalErrors += result.errors;
+        } catch (err: any) {
+          results.push({ filename: file.originalname, imported: 0, updated: 0, errors: 1 });
+          totalErrors++;
+        }
+      }
+
+      updateSyncMeta();
+
+      res.json({
+        success: true,
+        files: results,
+        totals: {
+          imported: totalImported,
+          updated: totalUpdated,
+          errors: totalErrors,
+          total: totalImported + totalUpdated,
+        },
+        message: `${totalImported + totalUpdated} imóveis processados de ${files.length} arquivo(s) (${totalImported} novos, ${totalUpdated} atualizados${totalErrors > 0 ? `, ${totalErrors} erros` : ""})`,
+      });
+    } catch (err: any) {
+      console.error("[CSV Batch Import] Error:", err.message);
+      res.status(500).json({ error: err.message || "Erro ao processar arquivos" });
+    }
+  });
+
+  // Get last sync metadata
+  app.get("/api/sync/last", (_req, res) => {
+    if (!lastSyncMeta) {
+      // Build from current DB state if never synced this session
+      const stats = storage.getStats();
+      if (stats.total > 0) {
+        res.json({
+          lastSync: null,
+          totalProperties: stats.total,
+          byState: stats.porEstado,
+        });
+      } else {
+        res.json({ lastSync: null, totalProperties: 0, byState: {} });
+      }
+      return;
+    }
+    res.json(lastSyncMeta);
   });
 
   // Clear all properties (for re-sync)

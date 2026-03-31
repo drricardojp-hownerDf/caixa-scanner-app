@@ -1,7 +1,6 @@
-import { useState, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import type { Property } from "@shared/schema";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,12 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { useToast } from "@/hooks/use-toast";
-import { useApifyToken } from "@/hooks/use-apify-token";
 import {
   Building2, MapPin, Bed, Car, Ruler, Percent, Heart, ArrowUpDown,
   Gavel, ShoppingCart, Globe, FileText, TrendingUp, TrendingDown,
-  ChevronRight, Filter, Search, RefreshCw, Loader2, Settings2, Upload
+  ChevronRight, Filter, Search, RefreshCw, Upload
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -80,211 +77,46 @@ function StatsBar() {
   );
 }
 
-const ESTADOS_SYNC = [
-  "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
-  "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN",
-  "RO", "RR", "RS", "SC", "SE", "SP", "TO"
-];
-
 function QuickSync() {
-  const { toast } = useToast();
-  const { token, hasToken } = useApifyToken();
-  const [syncEstado, setSyncEstado] = useState("SP");
-  const [syncCidade, setSyncCidade] = useState("");
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState("");
-  const csvInputRef = useRef<HTMLInputElement>(null);
+  const { data: lastSync } = useQuery<{
+    lastSync: string | null;
+    totalProperties: number;
+    byState: Record<string, number>;
+  }>({ queryKey: ["/api/sync/last"] });
 
-  const csvImportMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/import-csv", { method: "POST", body: formData });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Erro ao importar");
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cidades"] });
-      toast({ title: "CSV importado", description: data.message });
-      if (csvInputRef.current) csvInputRef.current.value = "";
-    },
-    onError: (err: any) => {
-      toast({ title: "Erro na importação", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const handleCsvImport = () => {
-    csvInputRef.current?.click();
-  };
-
-  const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) csvImportMutation.mutate(file);
-  };
-
-  const syncMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/sync", {
-      token: token.trim(),
-      estado: syncEstado,
-      cidade: syncCidade || undefined,
-    }),
-    onSuccess: () => {
-      setIsSyncing(true);
-      setSyncMessage("Buscando imóveis...");
-      toast({ title: "Busca iniciada", description: `Buscando em ${syncEstado}${syncCidade ? ` - ${syncCidade}` : ""}... aguarde 1-5 min.` });
-      const interval = setInterval(async () => {
-        try {
-          const res = await fetch("/api/sync/status");
-          const status = await res.json();
-          setSyncMessage(status.message || "Buscando...");
-          if (status.status === "completed") {
-            clearInterval(interval);
-            setIsSyncing(false);
-            setSyncMessage("");
-            queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
-            queryClient.invalidateQueries({ queryKey: ["/api/cidades"] });
-            toast({ title: "Atualizado", description: status.message });
-          } else if (status.status === "error") {
-            clearInterval(interval);
-            setIsSyncing(false);
-            setSyncMessage("");
-            toast({ title: "Erro", description: status.message, variant: "destructive" });
-          }
-        } catch { /* continue polling */ }
-      }, 3000);
-    },
-    onError: (err: any) => {
-      toast({ title: "Erro", description: err.message, variant: "destructive" });
-    },
-  });
-
-  if (!hasToken) {
-    return (
-      <Card className="border-dashed border-primary/30 bg-primary/5">
-        <CardContent className="p-3.5">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <RefreshCw className="h-4 w-4" />
-              <span>Configure seu token ou importe um CSV</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                ref={csvInputRef}
-                type="file"
-                accept=".csv"
-                className="hidden"
-                onChange={handleCsvFileChange}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCsvImport}
-                disabled={csvImportMutation.isPending}
-                className="shrink-0 min-h-[44px]"
-              >
-                {csvImportMutation.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <>
-                    <Upload className="h-3.5 w-3.5 mr-1.5" />
-                    CSV
-                  </>
-                )}
-              </Button>
-              <Link href="/sync">
-                <Button variant="outline" size="sm" className="shrink-0 min-h-[44px]">
-                  <Settings2 className="h-3.5 w-3.5 mr-1.5" />
-                  Configurar
-                </Button>
-              </Link>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const stateCount = lastSync?.byState ? Object.keys(lastSync.byState).length : 0;
 
   return (
-    <Card className="border-card-border">
-      <CardContent className="p-3.5 space-y-2.5">
-        <div className="flex items-center gap-2.5 flex-wrap">
-          <Select value={syncEstado} onValueChange={setSyncEstado}>
-            <SelectTrigger className="w-[80px] text-sm h-10 min-h-[44px]">
-              <SelectValue placeholder="Estado" />
-            </SelectTrigger>
-            <SelectContent>
-              {ESTADOS_SYNC.map(uf => (
-                <SelectItem key={uf} value={uf}>{uf}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <input
-            type="text"
-            placeholder="Cidade (opcional)"
-            value={syncCidade}
-            onChange={(e) => setSyncCidade(e.target.value.toUpperCase())}
-            className="flex-1 min-w-[120px] h-10 min-h-[44px] px-3 text-sm rounded-md border border-input bg-background placeholder:text-muted-foreground"
-          />
-          <Button
-            onClick={() => syncMutation.mutate()}
-            disabled={isSyncing}
-            className="h-10 min-h-[44px] px-4"
-          >
-            {isSyncing ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                Buscando...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="h-4 w-4 mr-1.5" />
-                Atualizar
-              </>
-            )}
-          </Button>
-          <input
-            ref={csvInputRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={handleCsvFileChange}
-          />
-          <Button
-            variant="outline"
-            onClick={handleCsvImport}
-            disabled={csvImportMutation.isPending}
-            className="h-10 min-h-[44px] px-3"
-            title="Importar CSV"
-          >
-            {csvImportMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <Upload className="h-4 w-4 mr-1.5" />
-                <span className="hidden sm:inline">CSV</span>
-              </>
-            )}
-          </Button>
+    <Card className="border-dashed border-primary/30 bg-primary/5">
+      <CardContent className="p-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <RefreshCw className="h-4 w-4 text-primary shrink-0" />
+            <div className="min-w-0">
+              {lastSync?.lastSync ? (
+                <p className="text-xs text-muted-foreground truncate">
+                  Última sincronização: {new Date(lastSync.lastSync).toLocaleDateString("pt-BR", {
+                    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+                  })} — {lastSync.totalProperties} imóveis em {stateCount} estado(s)
+                </p>
+              ) : lastSync && lastSync.totalProperties > 0 ? (
+                <p className="text-xs text-muted-foreground truncate">
+                  {lastSync.totalProperties} imóveis carregados de {stateCount} estado(s)
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Importe imóveis do site da Caixa
+                </p>
+              )}
+            </div>
+          </div>
           <Link href="/sync">
-            <Button variant="ghost" size="icon" className="h-10 w-10 min-h-[44px] min-w-[44px] text-muted-foreground">
-              <Settings2 className="h-4 w-4" />
+            <Button size="sm" className="shrink-0 min-h-[44px]">
+              <Upload className="h-3.5 w-3.5 mr-1.5" />
+              Sincronizar
             </Button>
           </Link>
         </div>
-        {isSyncing && syncMessage && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span>{syncMessage}</span>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
@@ -422,7 +254,6 @@ function PropertyCard({ property }: { property: Property }) {
 }
 
 export default function Dashboard() {
-  const [, setLocation] = useLocation();
   const [filters, setFilters] = useState({
     uf: "",
     cidade: "",
