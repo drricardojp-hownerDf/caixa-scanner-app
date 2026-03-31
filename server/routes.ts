@@ -69,9 +69,15 @@ function processCSVBuffer(buffer: Buffer): { imported: number; updated: number; 
 
 function parseBrazilianNumber(value: string): number | null {
   if (!value || !value.trim()) return null;
-  // Brazilian format: 368.191,37 → 368191.37
-  const cleaned = value.trim().replace(/\./g, "").replace(",", ".");
-  const num = parseFloat(cleaned);
+  const trimmed = value.trim();
+  // If value contains comma → Brazilian format: 368.191,37 → 368191.37
+  if (trimmed.includes(",")) {
+    const cleaned = trimmed.replace(/\./g, "").replace(",", ".");
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? null : num;
+  }
+  // No comma → standard decimal (e.g. 45.05 for discount)
+  const num = parseFloat(trimmed);
   return isNaN(num) ? null : num;
 }
 
