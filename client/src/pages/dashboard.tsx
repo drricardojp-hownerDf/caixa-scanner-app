@@ -434,11 +434,10 @@ export default function Dashboard() {
 
   const { data: ufs } = useQuery<string[]>({ queryKey: ["/api/ufs"] });
   const { data: cidades } = useQuery<string[]>({
-    queryKey: ["/api/cidades", filters.uf ? `?uf=${filters.uf}` : ""],
-    enabled: true,
+    queryKey: [filters.uf ? `/api/cidades?uf=${filters.uf}` : "/api/cidades"],
   });
   const { data: bairros } = useQuery<string[]>({
-    queryKey: [`/api/bairros?uf=${filters.uf || ""}&cidade=${filters.cidade || ""}`],
+    queryKey: [filters.uf || filters.cidade ? `/api/bairros?uf=${filters.uf || ""}&cidade=${filters.cidade || ""}` : "/api/bairros"],
     enabled: !!(filters.uf || filters.cidade),
   });
   const { data: tiposImovel } = useQuery<string[]>({
