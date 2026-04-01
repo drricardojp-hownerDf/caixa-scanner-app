@@ -277,6 +277,33 @@ function transformCsvRow(fields: string[]): InsertProperty | null {
 }
 
 export function registerRoutes(server: Server, app: Express) {
+  // Health check / diagnostic endpoint
+  app.get("/api/health", async (_req, res) => {
+    try {
+      const { pool } = await import("./storage");
+      const result = await pool.query("SELECT 1 as ok");
+      res.json({
+        status: "ok",
+        database: "connected",
+        dbTest: result.rows[0],
+        env: {
+          DATABASE_URL_SET: !!process.env.DATABASE_URL,
+          NODE_ENV: process.env.NODE_ENV,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        status: "error",
+        database: "disconnected",
+        error: err.message,
+        env: {
+          DATABASE_URL_SET: !!process.env.DATABASE_URL,
+          NODE_ENV: process.env.NODE_ENV,
+        },
+      });
+    }
+  });
+
   // Get all properties with filters (paginated)
   app.get("/api/properties", async (req, res) => {
     const filters: PropertyFilters = {

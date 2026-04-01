@@ -63,11 +63,17 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  console.log("DATABASE_URL set:", !!process.env.DATABASE_URL);
+  console.log("DATABASE_URL value:", process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^@]+@/, ':***@') : "NOT SET");
   try {
+    console.log("Connecting to database...");
     await initDatabase();
+    console.log("Database initialized OK");
     await seedDatabase();
+    console.log("Seed complete");
   } catch (err: any) {
     console.error("\n❌ Failed to connect to database:", err.message);
+    console.error("Full error:", err);
     console.error("Make sure DATABASE_URL is set and PostgreSQL is running.\n");
     // Continue starting the server so Railway doesn't restart loop
     // API calls will fail but the app won't crash endlessly
