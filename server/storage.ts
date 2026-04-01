@@ -3,15 +3,14 @@ import pg from "pg";
 import { properties, marketData, type Property, type InsertProperty, type MarketData, type InsertMarketData } from "@shared/schema";
 import { eq, and, gte, lte, desc, asc, sql } from "drizzle-orm";
 
+if (!process.env.DATABASE_URL) {
+  console.error("\n❌ DATABASE_URL not set!");
+  console.error("Add a PostgreSQL service in Railway and set DATABASE_URL.\n");
+}
+
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ...(process.env.DATABASE_URL ? {} : {
-    host: "localhost",
-    port: 5432,
-    database: "caixa_scanner",
-    user: "postgres",
-    password: "postgres",
-  }),
+  connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/caixa_scanner",
+  connectionTimeoutMillis: 10_000, // 10s timeout instead of hanging forever
 });
 
 const db = drizzle(pool);

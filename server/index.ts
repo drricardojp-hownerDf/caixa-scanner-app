@@ -63,8 +63,15 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  await initDatabase();
-  await seedDatabase();
+  try {
+    await initDatabase();
+    await seedDatabase();
+  } catch (err: any) {
+    console.error("\n❌ Failed to connect to database:", err.message);
+    console.error("Make sure DATABASE_URL is set and PostgreSQL is running.\n");
+    // Continue starting the server so Railway doesn't restart loop
+    // API calls will fail but the app won't crash endlessly
+  }
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
