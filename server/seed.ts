@@ -546,9 +546,9 @@ const sampleMarketData = [
   { cidade: "BIGUACU", uf: "SC", bairro: "DISTRITO INDUSTRIAL", tipoImovel: "Comercial", precoM2Venda: 3200, precoM2Aluguel: 18, precoM2AluguelCurta: null, taxaOcupacao: null, tendencia: "stable" },
 ];
 
-export function seedDatabase() {
+export async function seedDatabase() {
   // Check if already seeded
-  const existing = storage.getProperties();
+  const existing = await storage.getProperties();
   if (existing.total > 0) {
     console.log(`Database already has ${existing.total} properties, skipping seed.`);
     return;
@@ -557,11 +557,11 @@ export function seedDatabase() {
   console.log("Seeding database with sample data...");
 
   for (const prop of sampleProperties) {
-    storage.createProperty(prop as any);
+    await storage.createProperty(prop as any);
   }
 
   for (const market of sampleMarketData) {
-    storage.createMarketData(market as any);
+    await storage.createMarketData(market as any);
   }
 
   console.log(`Seeded ${sampleProperties.length} properties and ${sampleMarketData.length} market data entries.`);

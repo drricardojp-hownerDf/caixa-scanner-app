@@ -1,87 +1,90 @@
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
 import { properties, marketData, type Property, type InsertProperty, type MarketData, type InsertMarketData } from "@shared/schema";
-import { eq, like, and, gte, lte, desc, asc, sql } from "drizzle-orm";
+import { eq, and, gte, lte, desc, asc, sql } from "drizzle-orm";
 
-const sqlite = new Database("sqlite.db");
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ...(process.env.DATABASE_URL ? {} : {
+    host: "localhost",
+    port: 5432,
+    database: "caixa_scanner",
+    user: "postgres",
+    password: "postgres",
+  }),
+});
 
-// Enable WAL mode for much better write performance and concurrent access
-sqlite.pragma("journal_mode = WAL");
-sqlite.pragma("synchronous = NORMAL");
+const db = drizzle(pool);
 
-const db = drizzle(sqlite);
+export async function initDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS properties (
+      id SERIAL PRIMARY KEY,
+      id_imovel TEXT NOT NULL,
+      tipo_venda TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      tipo_imovel TEXT NOT NULL,
+      quartos INTEGER,
+      garagem INTEGER,
+      area_total DOUBLE PRECISION,
+      area_privativa DOUBLE PRECISION,
+      area_terreno DOUBLE PRECISION,
+      endereco TEXT NOT NULL,
+      bairro TEXT,
+      cidade TEXT NOT NULL,
+      uf TEXT NOT NULL,
+      cep TEXT,
+      valor_avaliacao DOUBLE PRECISION,
+      valor_min_venda DOUBLE PRECISION,
+      valor_min_venda_1_leilao DOUBLE PRECISION,
+      valor_min_venda_2_leilao DOUBLE PRECISION,
+      desconto DOUBLE PRECISION,
+      aceita_fgts INTEGER DEFAULT 0,
+      aceita_financiamento INTEGER DEFAULT 0,
+      url_imagem TEXT,
+      fotos TEXT,
+      link_edital TEXT,
+      link_matricula TEXT,
+      link_imovel TEXT,
+      edital TEXT,
+      leiloeiro TEXT,
+      data_leilao_1 TEXT,
+      data_leilao_2 TEXT,
+      condominio TEXT,
+      tributos TEXT,
+      preco_m2_mercado DOUBLE PRECISION,
+      preco_aluguel_m2 DOUBLE PRECISION,
+      score_flip DOUBLE PRECISION,
+      score_reforma DOUBLE PRECISION,
+      score_aluguel DOUBLE PRECISION,
+      score_geral DOUBLE PRECISION,
+      favorito INTEGER DEFAULT 0,
+      notas TEXT,
+      data_coleta TEXT
+    );
 
-// Create tables if not exist
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS properties (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    id_imovel TEXT NOT NULL,
-    tipo_venda TEXT NOT NULL,
-    titulo TEXT NOT NULL,
-    descricao TEXT,
-    tipo_imovel TEXT NOT NULL,
-    quartos INTEGER,
-    garagem INTEGER,
-    area_total REAL,
-    area_privativa REAL,
-    area_terreno REAL,
-    endereco TEXT NOT NULL,
-    bairro TEXT,
-    cidade TEXT NOT NULL,
-    uf TEXT NOT NULL,
-    cep TEXT,
-    valor_avaliacao REAL,
-    valor_min_venda REAL,
-    valor_min_venda_1_leilao REAL,
-    valor_min_venda_2_leilao REAL,
-    desconto REAL,
-    aceita_fgts INTEGER DEFAULT 0,
-    aceita_financiamento INTEGER DEFAULT 0,
-    url_imagem TEXT,
-    fotos TEXT,
-    link_edital TEXT,
-    link_matricula TEXT,
-    link_imovel TEXT,
-    edital TEXT,
-    leiloeiro TEXT,
-    data_leilao_1 TEXT,
-    data_leilao_2 TEXT,
-    condominio TEXT,
-    tributos TEXT,
-    preco_m2_mercado REAL,
-    preco_aluguel_m2 REAL,
-    score_flip REAL,
-    score_reforma REAL,
-    score_aluguel REAL,
-    score_geral REAL,
-    favorito INTEGER DEFAULT 0,
-    notas TEXT,
-    data_coleta TEXT
-  );
+    CREATE TABLE IF NOT EXISTS market_data (
+      id SERIAL PRIMARY KEY,
+      cidade TEXT NOT NULL,
+      uf TEXT NOT NULL,
+      bairro TEXT,
+      tipo_imovel TEXT,
+      preco_m2_venda DOUBLE PRECISION,
+      preco_m2_aluguel DOUBLE PRECISION,
+      preco_m2_aluguel_curta DOUBLE PRECISION,
+      taxa_ocupacao DOUBLE PRECISION,
+      tendencia TEXT
+    );
 
-  CREATE TABLE IF NOT EXISTS market_data (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cidade TEXT NOT NULL,
-    uf TEXT NOT NULL,
-    bairro TEXT,
-    tipo_imovel TEXT,
-    preco_m2_venda REAL,
-    preco_m2_aluguel REAL,
-    preco_m2_aluguel_curta REAL,
-    taxa_ocupacao REAL,
-    tendencia TEXT
-  );
-`);
-
-// Create indexes for fast lookups during CSV import and filtering
-sqlite.exec(`
-  CREATE INDEX IF NOT EXISTS idx_properties_id_imovel ON properties(id_imovel);
-  CREATE INDEX IF NOT EXISTS idx_properties_uf ON properties(uf);
-  CREATE INDEX IF NOT EXISTS idx_properties_cidade ON properties(cidade);
-  CREATE INDEX IF NOT EXISTS idx_properties_tipo_imovel ON properties(tipo_imovel);
-  CREATE INDEX IF NOT EXISTS idx_properties_desconto ON properties(desconto);
-  CREATE INDEX IF NOT EXISTS idx_properties_favorito ON properties(favorito);
-`);
+    CREATE INDEX IF NOT EXISTS idx_properties_id_imovel ON properties(id_imovel);
+    CREATE INDEX IF NOT EXISTS idx_properties_uf ON properties(uf);
+    CREATE INDEX IF NOT EXISTS idx_properties_cidade ON properties(cidade);
+    CREATE INDEX IF NOT EXISTS idx_properties_tipo_imovel ON properties(tipo_imovel);
+    CREATE INDEX IF NOT EXISTS idx_properties_desconto ON properties(desconto);
+    CREATE INDEX IF NOT EXISTS idx_properties_favorito ON properties(favorito);
+  `);
+}
 
 export interface PropertyFilters {
   uf?: string;
@@ -114,31 +117,31 @@ export interface PaginatedResult {
 }
 
 export interface IStorage {
-  getProperties(filters?: PropertyFilters): PaginatedResult;
-  getProperty(id: number): Property | undefined;
-  findByIdImovel(idImovel: string): Property | undefined;
-  createProperty(data: InsertProperty): Property;
-  updateProperty(id: number, data: Partial<InsertProperty>): Property | undefined;
-  deleteProperty(id: number): void;
-  toggleFavorite(id: number): Property | undefined;
-  updateNotes(id: number, notas: string): Property | undefined;
-  getMarketData(cidade: string, uf: string): MarketData[];
-  createMarketData(data: InsertMarketData): MarketData;
-  getStats(): {
+  getProperties(filters?: PropertyFilters): Promise<PaginatedResult>;
+  getProperty(id: number): Promise<Property | undefined>;
+  findByIdImovel(idImovel: string): Promise<Property | undefined>;
+  createProperty(data: InsertProperty): Promise<Property>;
+  updateProperty(id: number, data: Partial<InsertProperty>): Promise<Property | undefined>;
+  deleteProperty(id: number): Promise<void>;
+  toggleFavorite(id: number): Promise<Property | undefined>;
+  updateNotes(id: number, notas: string): Promise<Property | undefined>;
+  getMarketData(cidade: string, uf: string): Promise<MarketData[]>;
+  createMarketData(data: InsertMarketData): Promise<MarketData>;
+  getStats(): Promise<{
     total: number;
     porModalidade: Record<string, number>;
     porEstado: Record<string, number>;
     descontoMedio: number;
     valorMedioAvaliacao: number;
-  };
-  getDistinctUFs(): string[];
-  getDistinctCidades(uf?: string): string[];
-  getDistinctBairros(uf?: string, cidade?: string): string[];
-  getDistinctTiposImovel(): string[];
+  }>;
+  getDistinctUFs(): Promise<string[]>;
+  getDistinctCidades(uf?: string): Promise<string[]>;
+  getDistinctBairros(uf?: string, cidade?: string): Promise<string[]>;
+  getDistinctTiposImovel(): Promise<string[]>;
 }
 
 export class DatabaseStorage implements IStorage {
-  getProperties(filters?: PropertyFilters): PaginatedResult {
+  async getProperties(filters?: PropertyFilters): Promise<PaginatedResult> {
     const conditions: any[] = [];
 
     if (filters?.uf) conditions.push(eq(properties.uf, filters.uf));
@@ -173,23 +176,21 @@ export class DatabaseStorage implements IStorage {
     const pageSize = filters?.pageSize && filters.pageSize > 0 ? filters.pageSize : 10;
     const offset = (page - 1) * pageSize;
 
-    // Count total matching records
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     let totalResult;
     if (whereClause) {
-      totalResult = db.select({ count: sql<number>`COUNT(*)` }).from(properties).where(whereClause).get();
+      [totalResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(properties).where(whereClause);
     } else {
-      totalResult = db.select({ count: sql<number>`COUNT(*)` }).from(properties).get();
+      [totalResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(properties);
     }
-    const total = totalResult?.count ?? 0;
+    const total = Number(totalResult?.count ?? 0);
 
-    // Fetch paginated data
     let data: Property[];
     if (whereClause) {
-      data = db.select().from(properties).where(whereClause).orderBy(orderClause).limit(pageSize).offset(offset).all();
+      data = await db.select().from(properties).where(whereClause).orderBy(orderClause).limit(pageSize).offset(offset);
     } else {
-      data = db.select().from(properties).orderBy(orderClause).limit(pageSize).offset(offset).all();
+      data = await db.select().from(properties).orderBy(orderClause).limit(pageSize).offset(offset);
     }
 
     return {
@@ -201,117 +202,142 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  getProperty(id: number): Property | undefined {
-    return db.select().from(properties).where(eq(properties.id, id)).get();
+  async getProperty(id: number): Promise<Property | undefined> {
+    const [row] = await db.select().from(properties).where(eq(properties.id, id));
+    return row;
   }
 
-  findByIdImovel(idImovel: string): Property | undefined {
-    return db.select().from(properties).where(eq(properties.idImovel, idImovel)).get();
+  async findByIdImovel(idImovel: string): Promise<Property | undefined> {
+    const [row] = await db.select().from(properties).where(eq(properties.idImovel, idImovel));
+    return row;
   }
 
-  createProperty(data: InsertProperty): Property {
-    return db.insert(properties).values(data).returning().get();
+  async createProperty(data: InsertProperty): Promise<Property> {
+    const [row] = await db.insert(properties).values(data).returning();
+    return row;
   }
 
-  updateProperty(id: number, data: Partial<InsertProperty>): Property | undefined {
-    return db.update(properties).set(data).where(eq(properties.id, id)).returning().get();
+  async updateProperty(id: number, data: Partial<InsertProperty>): Promise<Property | undefined> {
+    const [row] = await db.update(properties).set(data).where(eq(properties.id, id)).returning();
+    return row;
   }
 
-  deleteProperty(id: number): void {
-    db.delete(properties).where(eq(properties.id, id)).run();
+  async deleteProperty(id: number): Promise<void> {
+    await db.delete(properties).where(eq(properties.id, id));
   }
 
-  toggleFavorite(id: number): Property | undefined {
-    const prop = this.getProperty(id);
+  async toggleFavorite(id: number): Promise<Property | undefined> {
+    const prop = await this.getProperty(id);
     if (!prop) return undefined;
-    return db.update(properties)
+    const [row] = await db.update(properties)
       .set({ favorito: prop.favorito === 1 ? 0 : 1 })
       .where(eq(properties.id, id))
-      .returning()
-      .get();
+      .returning();
+    return row;
   }
 
-  updateNotes(id: number, notas: string): Property | undefined {
-    return db.update(properties)
+  async updateNotes(id: number, notas: string): Promise<Property | undefined> {
+    const [row] = await db.update(properties)
       .set({ notas })
       .where(eq(properties.id, id))
-      .returning()
-      .get();
+      .returning();
+    return row;
   }
 
-  getMarketData(cidade: string, uf: string): MarketData[] {
-    return db.select().from(marketData)
-      .where(and(eq(marketData.cidade, cidade), eq(marketData.uf, uf)))
-      .all();
+  async getMarketData(cidade: string, uf: string): Promise<MarketData[]> {
+    return await db.select().from(marketData)
+      .where(and(eq(marketData.cidade, cidade), eq(marketData.uf, uf)));
   }
 
-  createMarketData(data: InsertMarketData): MarketData {
-    return db.insert(marketData).values(data).returning().get();
+  async createMarketData(data: InsertMarketData): Promise<MarketData> {
+    const [row] = await db.insert(marketData).values(data).returning();
+    return row;
   }
 
-  getStats() {
-    const allProps = db.select().from(properties).all();
-    const total = allProps.length;
+  async getStats(): Promise<{
+    total: number;
+    porModalidade: Record<string, number>;
+    porEstado: Record<string, number>;
+    descontoMedio: number;
+    valorMedioAvaliacao: number;
+  }> {
+    const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(properties);
+    const total = Number(countResult?.count ?? 0);
+
+    const [avgResult] = await db.select({
+      avgDesconto: sql<number>`AVG(desconto)`,
+      avgValor: sql<number>`AVG(valor_avaliacao)`,
+    }).from(properties);
+
+    const byModalidade = await db.select({
+      tipo: properties.tipoVenda,
+      count: sql<number>`COUNT(*)`,
+    }).from(properties).groupBy(properties.tipoVenda);
+
+    const byEstado = await db.select({
+      uf: properties.uf,
+      count: sql<number>`COUNT(*)`,
+    }).from(properties).groupBy(properties.uf);
+
     const porModalidade: Record<string, number> = {};
-    const porEstado: Record<string, number> = {};
-    let descontoTotal = 0;
-    let descontoCount = 0;
-    let valorTotal = 0;
-    let valorCount = 0;
+    for (const r of byModalidade) porModalidade[r.tipo] = Number(r.count);
 
-    for (const p of allProps) {
-      porModalidade[p.tipoVenda] = (porModalidade[p.tipoVenda] || 0) + 1;
-      porEstado[p.uf] = (porEstado[p.uf] || 0) + 1;
-      if (p.desconto) { descontoTotal += p.desconto; descontoCount++; }
-      if (p.valorAvaliacao) { valorTotal += p.valorAvaliacao; valorCount++; }
-    }
+    const porEstado: Record<string, number> = {};
+    for (const r of byEstado) porEstado[r.uf] = Number(r.count);
 
     return {
       total,
       porModalidade,
       porEstado,
-      descontoMedio: descontoCount > 0 ? descontoTotal / descontoCount : 0,
-      valorMedioAvaliacao: valorCount > 0 ? valorTotal / valorCount : 0,
+      descontoMedio: Number(avgResult?.avgDesconto ?? 0),
+      valorMedioAvaliacao: Number(avgResult?.avgValor ?? 0),
     };
   }
 
-  getDistinctUFs(): string[] {
-    const rows = sqlite.prepare("SELECT DISTINCT uf FROM properties ORDER BY uf").all() as { uf: string }[];
+  async getDistinctUFs(): Promise<string[]> {
+    const rows = await db.selectDistinct({ uf: properties.uf }).from(properties).orderBy(properties.uf);
     return rows.map(r => r.uf);
   }
 
-  getDistinctCidades(uf?: string): string[] {
+  async getDistinctCidades(uf?: string): Promise<string[]> {
     if (uf) {
-      const rows = sqlite.prepare("SELECT DISTINCT cidade FROM properties WHERE uf = ? ORDER BY cidade").all(uf) as { cidade: string }[];
+      const rows = await db.selectDistinct({ cidade: properties.cidade })
+        .from(properties)
+        .where(eq(properties.uf, uf))
+        .orderBy(properties.cidade);
       return rows.map(r => r.cidade);
     }
-    const rows = sqlite.prepare("SELECT DISTINCT cidade FROM properties ORDER BY cidade").all() as { cidade: string }[];
+    const rows = await db.selectDistinct({ cidade: properties.cidade }).from(properties).orderBy(properties.cidade);
     return rows.map(r => r.cidade);
   }
 
-  getDistinctBairros(uf?: string, cidade?: string): string[] {
-    const conditions: string[] = ["bairro IS NOT NULL", "bairro != ''"];
-    const params: string[] = [];
-    if (uf) {
-      conditions.push("uf = ?");
-      params.push(uf);
-    }
-    if (cidade) {
-      conditions.push("cidade = ?");
-      params.push(cidade);
-    }
-    const query = `SELECT DISTINCT bairro FROM properties WHERE ${conditions.join(" AND ")} ORDER BY bairro`;
-    const rows = sqlite.prepare(query).all(...params) as { bairro: string }[];
-    return rows.map(r => r.bairro);
+  async getDistinctBairros(uf?: string, cidade?: string): Promise<string[]> {
+    const conditions: any[] = [
+      sql`${properties.bairro} IS NOT NULL`,
+      sql`${properties.bairro} != ''`,
+    ];
+    if (uf) conditions.push(eq(properties.uf, uf));
+    if (cidade) conditions.push(eq(properties.cidade, cidade));
+
+    const rows = await db.selectDistinct({ bairro: properties.bairro })
+      .from(properties)
+      .where(and(...conditions))
+      .orderBy(properties.bairro);
+    return rows.map(r => r.bairro!);
   }
 
-  getDistinctTiposImovel(): string[] {
-    const rows = sqlite.prepare("SELECT DISTINCT tipo_imovel FROM properties WHERE tipo_imovel IS NOT NULL AND tipo_imovel != '' ORDER BY tipo_imovel").all() as { tipo_imovel: string }[];
-    return rows.map(r => r.tipo_imovel);
+  async getDistinctTiposImovel(): Promise<string[]> {
+    const rows = await db.selectDistinct({ tipoImovel: properties.tipoImovel })
+      .from(properties)
+      .where(and(
+        sql`${properties.tipoImovel} IS NOT NULL`,
+        sql`${properties.tipoImovel} != ''`,
+      ))
+      .orderBy(properties.tipoImovel);
+    return rows.map(r => r.tipoImovel);
   }
 }
 
 export const storage = new DatabaseStorage();
 
-// Expose raw sqlite handle for transaction support in bulk operations
-export { sqlite };
+export { pool };

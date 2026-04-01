@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import multer from "multer";
-import { storage, sqlite, type PropertyFilters } from "./storage";
+import { storage, pool, type PropertyFilters } from "./storage";
 import { syncFromApify, getSyncStatus } from "./apify";
 import type { InsertProperty } from "@shared/schema";
 
@@ -14,8 +14,8 @@ let lastSyncMeta: {
   byState: Record<string, number>;
 } | null = null;
 
-function updateSyncMeta() {
-  const stats = storage.getStats();
+async function updateSyncMeta() {
+  const stats = await storage.getStats();
   lastSyncMeta = {
     lastSync: new Date().toISOString(),
     totalProperties: stats.total,
@@ -23,7 +23,7 @@ function updateSyncMeta() {
   };
 }
 
-function processCSVBuffer(buffer: Buffer): { imported: number; updated: number; errors: number } {
+async function processCSVBuffer(buffer: Buffer): Promise<{ imported: number; updated: number; errors: number }> {
   const content = buffer.toString("latin1");
   const lines = content.split(/\r?\n/);
 
@@ -39,10 +39,11 @@ function processCSVBuffer(buffer: Buffer): { imported: number; updated: number; 
   let updated = 0;
   let errors = 0;
 
-  // Wrap entire import in a single transaction for massive speed improvement
-  // Without this, each INSERT does an fsync — with 20K+ rows this takes minutes.
-  // With a transaction, all writes are batched into a single fsync.
-  const runImport = sqlite.transaction(() => {
+  // Use a PG transaction for atomicity and performance
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
     for (let i = dataStartIndex; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -52,22 +53,27 @@ function processCSVBuffer(buffer: Buffer): { imported: number; updated: number; 
         const property = transformCsvRow(fields);
         if (!property) { errors++; continue; }
 
-        const existing = storage.findByIdImovel(property.idImovel);
+        const existing = await storage.findByIdImovel(property.idImovel);
         if (existing) {
           const { favorito, notas, ...updateData } = property;
-          storage.updateProperty(existing.id, updateData);
+          await storage.updateProperty(existing.id, updateData);
           updated++;
         } else {
-          storage.createProperty(property);
+          await storage.createProperty(property);
           imported++;
         }
       } catch {
         errors++;
       }
     }
-  });
 
-  runImport();
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 
   return { imported, updated, errors };
 }
@@ -272,7 +278,7 @@ function transformCsvRow(fields: string[]): InsertProperty | null {
 
 export function registerRoutes(server: Server, app: Express) {
   // Get all properties with filters (paginated)
-  app.get("/api/properties", (req, res) => {
+  app.get("/api/properties", async (req, res) => {
     const filters: PropertyFilters = {
       uf: req.query.uf as string | undefined,
       cidade: req.query.cidade as string | undefined,
@@ -294,17 +300,17 @@ export function registerRoutes(server: Server, app: Express) {
       page: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
     };
-    const result = storage.getProperties(filters);
+    const result = await storage.getProperties(filters);
     res.json(result);
   });
 
   // Get single property with analysis
-  app.get("/api/properties/:id", (req, res) => {
-    const prop = storage.getProperty(Number(req.params.id));
+  app.get("/api/properties/:id", async (req, res) => {
+    const prop = await storage.getProperty(Number(req.params.id));
     if (!prop) return res.status(404).json({ error: "Imóvel não encontrado" });
 
     // Get market data for this property's location
-    const market = storage.getMarketData(prop.cidade, prop.uf);
+    const market = await storage.getMarketData(prop.cidade, prop.uf);
 
     // Calculate financial analysis
     const analysis = calculateAnalysis(prop, market);
@@ -312,41 +318,41 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // Toggle favorite
-  app.post("/api/properties/:id/favorite", (req, res) => {
-    const prop = storage.toggleFavorite(Number(req.params.id));
+  app.post("/api/properties/:id/favorite", async (req, res) => {
+    const prop = await storage.toggleFavorite(Number(req.params.id));
     if (!prop) return res.status(404).json({ error: "Imóvel não encontrado" });
     res.json(prop);
   });
 
   // Update notes
-  app.patch("/api/properties/:id/notes", (req, res) => {
+  app.patch("/api/properties/:id/notes", async (req, res) => {
     const { notas } = req.body;
-    const prop = storage.updateNotes(Number(req.params.id), notas);
+    const prop = await storage.updateNotes(Number(req.params.id), notas);
     if (!prop) return res.status(404).json({ error: "Imóvel não encontrado" });
     res.json(prop);
   });
 
   // Get dashboard stats
-  app.get("/api/stats", (_req, res) => {
-    const stats = storage.getStats();
+  app.get("/api/stats", async (_req, res) => {
+    const stats = await storage.getStats();
     res.json(stats);
   });
 
   // Get distinct UFs
-  app.get("/api/ufs", (_req, res) => {
-    const ufs = storage.getDistinctUFs();
+  app.get("/api/ufs", async (_req, res) => {
+    const ufs = await storage.getDistinctUFs();
     res.json(ufs);
   });
 
   // Get distinct cities (optionally by UF)
-  app.get("/api/cidades", (req, res) => {
-    const cidades = storage.getDistinctCidades(req.query.uf as string | undefined);
+  app.get("/api/cidades", async (req, res) => {
+    const cidades = await storage.getDistinctCidades(req.query.uf as string | undefined);
     res.json(cidades);
   });
 
   // Get distinct bairros (optionally by UF and cidade)
-  app.get("/api/bairros", (req, res) => {
-    const bairros = storage.getDistinctBairros(
+  app.get("/api/bairros", async (req, res) => {
+    const bairros = await storage.getDistinctBairros(
       req.query.uf as string | undefined,
       req.query.cidade as string | undefined
     );
@@ -354,8 +360,8 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // Get distinct property types
-  app.get("/api/tipos-imovel", (_req, res) => {
-    const tipos = storage.getDistinctTiposImovel();
+  app.get("/api/tipos-imovel", async (_req, res) => {
+    const tipos = await storage.getDistinctTiposImovel();
     res.json(tipos);
   });
 
@@ -384,7 +390,7 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // Import single CSV file
-  app.post("/api/import-csv", upload.single("file"), (req, res) => {
+  app.post("/api/import-csv", upload.single("file"), async (req, res) => {
     // Extend timeout for large file processing (3 minutes)
     req.setTimeout(180_000);
     res.setTimeout(180_000);
@@ -393,8 +399,8 @@ export function registerRoutes(server: Server, app: Express) {
         return res.status(400).json({ error: "Nenhum arquivo enviado" });
       }
 
-      const result = processCSVBuffer(req.file.buffer);
-      updateSyncMeta();
+      const result = await processCSVBuffer(req.file.buffer);
+      await updateSyncMeta();
 
       res.json({
         success: true,
@@ -409,7 +415,7 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // Import multiple CSV files at once
-  app.post("/api/import-csv-batch", upload.array("files", 30), (req, res) => {
+  app.post("/api/import-csv-batch", upload.array("files", 30), async (req, res) => {
     // Extend timeout for large file processing (3 minutes)
     req.setTimeout(180_000);
     res.setTimeout(180_000);
@@ -426,7 +432,7 @@ export function registerRoutes(server: Server, app: Express) {
 
       for (const file of files) {
         try {
-          const result = processCSVBuffer(file.buffer);
+          const result = await processCSVBuffer(file.buffer);
           results.push({ filename: file.originalname, ...result });
           totalImported += result.imported;
           totalUpdated += result.updated;
@@ -437,7 +443,7 @@ export function registerRoutes(server: Server, app: Express) {
         }
       }
 
-      updateSyncMeta();
+      await updateSyncMeta();
 
       res.json({
         success: true,
@@ -457,10 +463,10 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // Get last sync metadata
-  app.get("/api/sync/last", (_req, res) => {
+  app.get("/api/sync/last", async (_req, res) => {
     if (!lastSyncMeta) {
       // Build from current DB state if never synced this session
-      const stats = storage.getStats();
+      const stats = await storage.getStats();
       if (stats.total > 0) {
         res.json({
           lastSync: null,
@@ -476,12 +482,12 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // Clear all properties (for re-sync)
-  app.delete("/api/properties", (_req, res) => {
-    const result = storage.getProperties({ pageSize: 100000 });
+  app.delete("/api/properties", async (_req, res) => {
+    const result = await storage.getProperties({ pageSize: 100000 });
     let deleted = 0;
     for (const p of result.data) {
       if (p.favorito !== 1) { // Keep favorites
-        storage.deleteProperty(p.id);
+        await storage.deleteProperty(p.id);
         deleted++;
       }
     }

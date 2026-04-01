@@ -2,9 +2,6 @@ FROM node:20.19.0-bookworm AS builder
 
 WORKDIR /app
 
-# Install build tools needed for better-sqlite3
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-
 # Copy package files first for better caching
 COPY package.json package-lock.json ./
 
