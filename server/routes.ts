@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import multer from "multer";
-import { storage, type PropertyFilters } from "./storage";
+import { storage, sqlite, type PropertyFilters } from "./storage";
 import { syncFromApify, getSyncStatus } from "./apify";
 import type { InsertProperty } from "@shared/schema";
 
@@ -39,28 +39,35 @@ function processCSVBuffer(buffer: Buffer): { imported: number; updated: number; 
   let updated = 0;
   let errors = 0;
 
-  for (let i = dataStartIndex; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+  // Wrap entire import in a single transaction for massive speed improvement
+  // Without this, each INSERT does an fsync — with 20K+ rows this takes minutes.
+  // With a transaction, all writes are batched into a single fsync.
+  const runImport = sqlite.transaction(() => {
+    for (let i = dataStartIndex; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
 
-    try {
-      const fields = parseCsvRow(line);
-      const property = transformCsvRow(fields);
-      if (!property) { errors++; continue; }
+      try {
+        const fields = parseCsvRow(line);
+        const property = transformCsvRow(fields);
+        if (!property) { errors++; continue; }
 
-      const existing = storage.findByIdImovel(property.idImovel);
-      if (existing) {
-        const { favorito, notas, ...updateData } = property;
-        storage.updateProperty(existing.id, updateData);
-        updated++;
-      } else {
-        storage.createProperty(property);
-        imported++;
+        const existing = storage.findByIdImovel(property.idImovel);
+        if (existing) {
+          const { favorito, notas, ...updateData } = property;
+          storage.updateProperty(existing.id, updateData);
+          updated++;
+        } else {
+          storage.createProperty(property);
+          imported++;
+        }
+      } catch {
+        errors++;
       }
-    } catch {
-      errors++;
     }
-  }
+  });
+
+  runImport();
 
   return { imported, updated, errors };
 }

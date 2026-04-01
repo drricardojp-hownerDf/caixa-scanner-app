@@ -4,6 +4,11 @@ import { properties, marketData, type Property, type InsertProperty, type Market
 import { eq, like, and, gte, lte, desc, asc, sql } from "drizzle-orm";
 
 const sqlite = new Database("sqlite.db");
+
+// Enable WAL mode for much better write performance and concurrent access
+sqlite.pragma("journal_mode = WAL");
+sqlite.pragma("synchronous = NORMAL");
+
 const db = drizzle(sqlite);
 
 // Create tables if not exist
@@ -66,6 +71,16 @@ sqlite.exec(`
     taxa_ocupacao REAL,
     tendencia TEXT
   );
+`);
+
+// Create indexes for fast lookups during CSV import and filtering
+sqlite.exec(`
+  CREATE INDEX IF NOT EXISTS idx_properties_id_imovel ON properties(id_imovel);
+  CREATE INDEX IF NOT EXISTS idx_properties_uf ON properties(uf);
+  CREATE INDEX IF NOT EXISTS idx_properties_cidade ON properties(cidade);
+  CREATE INDEX IF NOT EXISTS idx_properties_tipo_imovel ON properties(tipo_imovel);
+  CREATE INDEX IF NOT EXISTS idx_properties_desconto ON properties(desconto);
+  CREATE INDEX IF NOT EXISTS idx_properties_favorito ON properties(favorito);
 `);
 
 export interface PropertyFilters {
@@ -297,3 +312,6 @@ export class DatabaseStorage implements IStorage {
 }
 
 export const storage = new DatabaseStorage();
+
+// Expose raw sqlite handle for transaction support in bulk operations
+export { sqlite };
