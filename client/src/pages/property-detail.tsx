@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, Link } from "wouter";
+import { useRoute, Link, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Property } from "@shared/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -195,12 +195,22 @@ export default function PropertyDetail() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <SidebarTrigger />
-        <Link href="/">
-          <Button variant="ghost" size="sm" data-testid="button-back">
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Voltar
-          </Button>
-        </Link>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="button-back"
+          onClick={() => {
+            // Use browser history to go back to the dashboard with filters preserved
+            if (window.history.length > 1) {
+              window.history.back();
+            } else {
+              window.location.hash = "#/";
+            }
+          }}
+        >
+          <ArrowLeft className="h-4 w-4 mr-1" />
+          Voltar
+        </Button>
       </div>
 
       {/* Property Info Card */}

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import type { Property } from "@shared/schema";
@@ -19,7 +19,65 @@ import {
   Gavel, ShoppingCart, Globe, FileText, TrendingUp, TrendingDown,
   ChevronRight, Filter, Search, RefreshCw, Upload
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+
+// ---- URL-based filter persistence ----
+const FILTER_KEYS = [
+  "uf", "cidade", "bairro", "precoMin", "precoMax",
+  "descontoMin", "tipoImovel", "quartos", "garagemMin",
+  "condominio", "tipoVenda",
+] as const;
+
+type Filters = Record<typeof FILTER_KEYS[number], string>;
+
+const emptyFilters: Filters = {
+  uf: "", cidade: "", bairro: "", precoMin: "", precoMax: "",
+  descontoMin: "", tipoImovel: "", quartos: "", garagemMin: "",
+  condominio: "", tipoVenda: "",
+};
+
+/** Read filters, sort and page from the URL search params (before the hash) */
+function parseSearchParams(): {
+  filters: Filters;
+  sort: string;
+  page: number;
+  searched: boolean;
+} {
+  const sp = new URLSearchParams(window.location.search);
+  const filters = { ...emptyFilters };
+  for (const key of FILTER_KEYS) {
+    filters[key] = sp.get(key) || "";
+  }
+  const sort = sp.get("sort") || "desconto-desc";
+  const page = Math.max(1, parseInt(sp.get("page") || "1", 10) || 1);
+  const searched = sp.get("searched") === "1";
+  return { filters, sort, page, searched };
+}
+
+/** Build URL with search params + current hash path */
+function buildUrl(filters: Filters, sort: string, page: number, searched: boolean): string {
+  const sp = new URLSearchParams();
+  for (const key of FILTER_KEYS) {
+    if (filters[key]) sp.set(key, filters[key]);
+  }
+  if (sort !== "desconto-desc") sp.set("sort", sort);
+  if (page > 1) sp.set("page", String(page));
+  if (searched) sp.set("searched", "1");
+  const qs = sp.toString();
+  const hash = window.location.hash || "#/";
+  const base = window.location.pathname;
+  return qs ? `${base}?${qs}${hash}` : `${base}${hash}`;
+}
+
+/** Write filters into URL using replaceState (for filter tweaks, sort, page changes) */
+function writeHashParams(filters: Filters, sort: string, page: number, searched: boolean) {
+  window.history.replaceState(null, "", buildUrl(filters, sort, page, searched));
+}
+
+/** Push a new history entry (used when performing a search — so back button returns here) */
+function pushHashParams(filters: Filters, sort: string, page: number, searched: boolean) {
+  window.history.pushState(null, "", buildUrl(filters, sort, page, searched));
+}
 
 function formatCurrency(value: number | null | undefined): string {
   if (!value) return "—";
@@ -316,25 +374,28 @@ const sortOptions: SortOption[] = [
 ];
 
 export default function Dashboard() {
-  const [filters, setFilters] = useState({
-    uf: "",
-    cidade: "",
-    bairro: "",
-    precoMin: "",
-    precoMax: "",
-    descontoMin: "",
-    tipoImovel: "",
-    quartos: "",
-    garagemMin: "",
-    condominio: "",
-    tipoVenda: "",
-  });
-  const [activeSort, setActiveSort] = useState("desconto-desc");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [searchFilters, setSearchFilters] = useState<typeof filters | null>(null);
+  // Initialize state from URL hash params (survives navigation to /property/:id and back)
+  const initial = useMemo(() => parseSearchParams(), []);
+
+  const [filters, setFilters] = useState<Filters>(initial.filters);
+  const [activeSort, setActiveSort] = useState(initial.sort);
+  const [currentPage, setCurrentPage] = useState(initial.page);
+  const [hasSearched, setHasSearched] = useState(initial.searched);
+  const [searchFilters, setSearchFilters] = useState<Filters | null>(
+    initial.searched ? initial.filters : null
+  );
   const [compareIds, setCompareIds] = useState<Set<number>>(new Set());
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  // Sync state back to URL hash whenever search-relevant state changes
+  useEffect(() => {
+    writeHashParams(
+      hasSearched && searchFilters ? searchFilters : filters,
+      activeSort,
+      currentPage,
+      hasSearched,
+    );
+  }, [filters, searchFilters, activeSort, currentPage, hasSearched]);
 
   // Count active filters (non-empty values)
   const activeFilterCount = Object.values(filters).filter((v) => v !== "").length;
@@ -386,9 +447,12 @@ export default function Dashboard() {
 
   const handleSearch = () => {
     if (!canSearch) return;
-    setSearchFilters({ ...filters });
+    const newFilters = { ...filters };
+    setSearchFilters(newFilters);
     setCurrentPage(1);
     setHasSearched(true);
+    // Push a history entry so browser back button returns to this search state
+    pushHashParams(newFilters, activeSort, 1, true);
   };
 
   const handleSortChange = (sortKey: string) => {
@@ -415,11 +479,7 @@ export default function Dashboard() {
   }, []);
 
   const handleClearFilters = () => {
-    setFilters({
-      uf: "", cidade: "", bairro: "", precoMin: "", precoMax: "",
-      descontoMin: "", tipoImovel: "", quartos: "", garagemMin: "",
-      condominio: "", tipoVenda: "",
-    });
+    setFilters({ ...emptyFilters });
     setHasSearched(false);
     setSearchFilters(null);
     setCurrentPage(1);
