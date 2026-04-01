@@ -42,7 +42,6 @@ export default function SyncPage() {
   const [showApify, setShowApify] = useState(false);
 
   const invalidateAll = () => {
-    queryClient.invalidateQueries({ queryKey: ["/api/properties"] });
     queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     queryClient.invalidateQueries({ queryKey: ["/api/ufs"] });
     queryClient.invalidateQueries({ queryKey: ["/api/cidades"] });
@@ -379,12 +378,12 @@ export default function SyncPage() {
 
           {/* Results summary */}
           {batchDone && (
-            <div className="p-3 bg-green-50 dark:bg-green-900/10 rounded-lg space-y-2">
+            <div className="p-3 bg-green-50 dark:bg-green-900/10 rounded-lg space-y-2" data-testid="panel-upload-success">
               <div className="flex items-start gap-2 text-sm text-green-700 dark:text-green-400">
                 <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
                 <div>
-                  <p className="font-medium">
-                    {totalResults.imported + totalResults.updated} imóveis processados
+                  <p className="font-medium" data-testid="text-upload-result">
+                    ✓ {totalResults.imported + totalResults.updated} imóveis recebidos e armazenados. Acesse o Painel e use os filtros para visualizar.
                   </p>
                   <p className="text-xs">
                     {totalResults.imported} novos, {totalResults.updated} atualizados
@@ -401,6 +400,7 @@ export default function SyncPage() {
                   setFileResults([]);
                   setBatchDone(false);
                 }}
+                data-testid="button-import-more"
               >
                 Importar mais arquivos
               </Button>

@@ -11,11 +11,12 @@ import {
   SidebarMenuItem,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { LayoutDashboard, Heart, Building2, TrendingUp, RefreshCw, Smartphone } from "lucide-react";
+import { LayoutDashboard, Heart, Building2, TrendingUp, RefreshCw, Smartphone, ArrowRightLeft } from "lucide-react";
 
 const navItems = [
   { label: "Painel", href: "/", icon: LayoutDashboard },
   { label: "Favoritos", href: "/?favoritos=true", icon: Heart },
+  { label: "Comparar", href: "/compare", icon: ArrowRightLeft },
   { label: "Sincronizar", href: "/sync", icon: RefreshCw },
 ];
 

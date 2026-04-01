@@ -549,8 +549,8 @@ const sampleMarketData = [
 export function seedDatabase() {
   // Check if already seeded
   const existing = storage.getProperties();
-  if (existing.length > 0) {
-    console.log(`Database already has ${existing.length} properties, skipping seed.`);
+  if (existing.total > 0) {
+    console.log(`Database already has ${existing.total} properties, skipping seed.`);
     return;
   }
 

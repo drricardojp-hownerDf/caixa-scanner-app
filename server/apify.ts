@@ -372,7 +372,7 @@ export async function syncFromApify(
         const property = transformApifyItem(item);
         if (property.cidade && property.uf) {
           // Check if property already exists (by idImovel)
-          const existing = storage.getProperties().find(p => p.idImovel === property.idImovel);
+          const existing = storage.findByIdImovel(property.idImovel);
           if (existing) {
             storage.updateProperty(existing.id, property);
           } else {

@@ -71,6 +71,7 @@ sqlite.exec(`
 export interface PropertyFilters {
   uf?: string;
   cidade?: string;
+  bairro?: string;
   tipoImovel?: string;
   tipoVenda?: string;
   precoMin?: number;
@@ -78,15 +79,27 @@ export interface PropertyFilters {
   quartos?: number;
   areaMin?: number;
   descontoMin?: number;
+  garagemMin?: number;
+  condominio?: string;
   aceitaFGTS?: boolean;
   aceitaFinanciamento?: boolean;
   favoritos?: boolean;
   orderBy?: string;
   orderDir?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PaginatedResult {
+  data: Property[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
 export interface IStorage {
-  getProperties(filters?: PropertyFilters): Property[];
+  getProperties(filters?: PropertyFilters): PaginatedResult;
   getProperty(id: number): Property | undefined;
   findByIdImovel(idImovel: string): Property | undefined;
   createProperty(data: InsertProperty): Property;
@@ -105,14 +118,17 @@ export interface IStorage {
   };
   getDistinctUFs(): string[];
   getDistinctCidades(uf?: string): string[];
+  getDistinctBairros(uf?: string, cidade?: string): string[];
+  getDistinctTiposImovel(): string[];
 }
 
 export class DatabaseStorage implements IStorage {
-  getProperties(filters?: PropertyFilters): Property[] {
+  getProperties(filters?: PropertyFilters): PaginatedResult {
     const conditions: any[] = [];
 
     if (filters?.uf) conditions.push(eq(properties.uf, filters.uf));
     if (filters?.cidade) conditions.push(eq(properties.cidade, filters.cidade));
+    if (filters?.bairro) conditions.push(eq(properties.bairro, filters.bairro));
     if (filters?.tipoImovel) conditions.push(eq(properties.tipoImovel, filters.tipoImovel));
     if (filters?.tipoVenda) conditions.push(eq(properties.tipoVenda, filters.tipoVenda));
     if (filters?.precoMin) conditions.push(gte(properties.valorMinVenda, filters.precoMin));
@@ -120,6 +136,9 @@ export class DatabaseStorage implements IStorage {
     if (filters?.quartos) conditions.push(gte(properties.quartos, filters.quartos));
     if (filters?.areaMin) conditions.push(gte(properties.areaTotal, filters.areaMin));
     if (filters?.descontoMin) conditions.push(gte(properties.desconto, filters.descontoMin));
+    if (filters?.garagemMin) conditions.push(gte(properties.garagem, filters.garagemMin));
+    if (filters?.condominio === "sim") conditions.push(sql`${properties.condominio} IS NOT NULL AND ${properties.condominio} != ''`);
+    if (filters?.condominio === "nao") conditions.push(sql`(${properties.condominio} IS NULL OR ${properties.condominio} = '')`);
     if (filters?.aceitaFGTS) conditions.push(eq(properties.aceitaFGTS, 1));
     if (filters?.aceitaFinanciamento) conditions.push(eq(properties.aceitaFinanciamento, 1));
     if (filters?.favoritos) conditions.push(eq(properties.favorito, 1));
@@ -130,15 +149,41 @@ export class DatabaseStorage implements IStorage {
     } else if (filters?.orderBy === "desconto") {
       orderClause = filters.orderDir === "asc" ? asc(properties.desconto) : desc(properties.desconto);
     } else if (filters?.orderBy === "score") {
-      orderClause = desc(properties.scoreGeral);
+      orderClause = filters.orderDir === "asc" ? asc(properties.scoreGeral) : desc(properties.scoreGeral);
     } else if (filters?.orderBy === "area") {
-      orderClause = desc(properties.areaTotal);
+      orderClause = filters.orderDir === "asc" ? asc(properties.areaTotal) : desc(properties.areaTotal);
     }
 
-    if (conditions.length > 0) {
-      return db.select().from(properties).where(and(...conditions)).orderBy(orderClause).all();
+    const page = filters?.page && filters.page > 0 ? filters.page : 1;
+    const pageSize = filters?.pageSize && filters.pageSize > 0 ? filters.pageSize : 10;
+    const offset = (page - 1) * pageSize;
+
+    // Count total matching records
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let totalResult;
+    if (whereClause) {
+      totalResult = db.select({ count: sql<number>`COUNT(*)` }).from(properties).where(whereClause).get();
+    } else {
+      totalResult = db.select({ count: sql<number>`COUNT(*)` }).from(properties).get();
     }
-    return db.select().from(properties).orderBy(orderClause).all();
+    const total = totalResult?.count ?? 0;
+
+    // Fetch paginated data
+    let data: Property[];
+    if (whereClause) {
+      data = db.select().from(properties).where(whereClause).orderBy(orderClause).limit(pageSize).offset(offset).all();
+    } else {
+      data = db.select().from(properties).orderBy(orderClause).limit(pageSize).offset(offset).all();
+    }
+
+    return {
+      data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   getProperty(id: number): Property | undefined {
@@ -227,6 +272,27 @@ export class DatabaseStorage implements IStorage {
     }
     const rows = sqlite.prepare("SELECT DISTINCT cidade FROM properties ORDER BY cidade").all() as { cidade: string }[];
     return rows.map(r => r.cidade);
+  }
+
+  getDistinctBairros(uf?: string, cidade?: string): string[] {
+    const conditions: string[] = ["bairro IS NOT NULL", "bairro != ''"];
+    const params: string[] = [];
+    if (uf) {
+      conditions.push("uf = ?");
+      params.push(uf);
+    }
+    if (cidade) {
+      conditions.push("cidade = ?");
+      params.push(cidade);
+    }
+    const query = `SELECT DISTINCT bairro FROM properties WHERE ${conditions.join(" AND ")} ORDER BY bairro`;
+    const rows = sqlite.prepare(query).all(...params) as { bairro: string }[];
+    return rows.map(r => r.bairro);
+  }
+
+  getDistinctTiposImovel(): string[] {
+    const rows = sqlite.prepare("SELECT DISTINCT tipo_imovel FROM properties WHERE tipo_imovel IS NOT NULL AND tipo_imovel != '' ORDER BY tipo_imovel").all() as { tipo_imovel: string }[];
+    return rows.map(r => r.tipo_imovel);
   }
 }
 

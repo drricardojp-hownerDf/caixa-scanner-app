@@ -264,11 +264,12 @@ function transformCsvRow(fields: string[]): InsertProperty | null {
 }
 
 export function registerRoutes(server: Server, app: Express) {
-  // Get all properties with filters
+  // Get all properties with filters (paginated)
   app.get("/api/properties", (req, res) => {
     const filters: PropertyFilters = {
       uf: req.query.uf as string | undefined,
       cidade: req.query.cidade as string | undefined,
+      bairro: req.query.bairro as string | undefined,
       tipoImovel: req.query.tipoImovel as string | undefined,
       tipoVenda: req.query.tipoVenda as string | undefined,
       precoMin: req.query.precoMin ? Number(req.query.precoMin) : undefined,
@@ -276,14 +277,18 @@ export function registerRoutes(server: Server, app: Express) {
       quartos: req.query.quartos ? Number(req.query.quartos) : undefined,
       areaMin: req.query.areaMin ? Number(req.query.areaMin) : undefined,
       descontoMin: req.query.descontoMin ? Number(req.query.descontoMin) : undefined,
+      garagemMin: req.query.garagemMin ? Number(req.query.garagemMin) : undefined,
+      condominio: req.query.condominio as string | undefined,
       aceitaFGTS: req.query.aceitaFGTS === "true",
       aceitaFinanciamento: req.query.aceitaFinanciamento === "true",
       favoritos: req.query.favoritos === "true",
       orderBy: req.query.orderBy as string | undefined,
       orderDir: req.query.orderDir as string | undefined,
+      page: req.query.page ? Number(req.query.page) : undefined,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
     };
-    const props = storage.getProperties(filters);
-    res.json(props);
+    const result = storage.getProperties(filters);
+    res.json(result);
   });
 
   // Get single property with analysis
@@ -330,6 +335,21 @@ export function registerRoutes(server: Server, app: Express) {
   app.get("/api/cidades", (req, res) => {
     const cidades = storage.getDistinctCidades(req.query.uf as string | undefined);
     res.json(cidades);
+  });
+
+  // Get distinct bairros (optionally by UF and cidade)
+  app.get("/api/bairros", (req, res) => {
+    const bairros = storage.getDistinctBairros(
+      req.query.uf as string | undefined,
+      req.query.cidade as string | undefined
+    );
+    res.json(bairros);
+  });
+
+  // Get distinct property types
+  app.get("/api/tipos-imovel", (_req, res) => {
+    const tipos = storage.getDistinctTiposImovel();
+    res.json(tipos);
   });
 
   // Sync from Apify - start data collection
@@ -450,15 +470,15 @@ export function registerRoutes(server: Server, app: Express) {
 
   // Clear all properties (for re-sync)
   app.delete("/api/properties", (_req, res) => {
-    const all = storage.getProperties();
+    const result = storage.getProperties({ pageSize: 100000 });
     let deleted = 0;
-    for (const p of all) {
+    for (const p of result.data) {
       if (p.favorito !== 1) { // Keep favorites
         storage.deleteProperty(p.id);
         deleted++;
       }
     }
-    res.json({ deleted, kept: all.length - deleted });
+    res.json({ deleted, kept: result.data.length - deleted });
   });
 }
 
